@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Valley Terrain Generator</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; font-family: system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  #info {
+    position: fixed; left: 12px; bottom: 12px; z-index: 10;
+    color: #cdd3e0; font-size: 12px; line-height: 1.5;
+    background: rgba(10,12,20,.55); padding: 8px 12px; border-radius: 8px;
+    pointer-events: none; max-width: 340px;
+  }
+  #info b { color: #ffd089; }
+  #status {
+    position: fixed; right: 12px; bottom: 12px; z-index: 10;
+    color: #9aa3b5; font-size: 12px; background: rgba(10,12,20,.55);
+    padding: 6px 10px; border-radius: 8px;
+  }
+  #hud {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 10;
+    color: #e8eefb; font-size: 13px; letter-spacing: .08em; display: none;
+    background: rgba(10,12,20,.5); padding: 8px 18px; border-radius: 10px;
+    border: 1px solid rgba(255,208,137,.35); font-variant-numeric: tabular-nums;
+  }
+  #hud b { color: #ffd089; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="info">
+  <b>Valley Terrain Generator</b><br/>
+  Drag to orbit · scroll to zoom · right-drag to pan.<br/>
+  Tweak the panel, then <b>Export GLB / OBJ</b> for your 3D software.<br/>
+  <b>Export Path JSON</b> gives the centerline points to drive your runner.
+</div>
+<div id="status">ready</div>
+<div id="hud">DISTANCE <b>0 M</b> &nbsp;·&nbsp; TIME <b>00:00</b></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+
+const statusEl = document.getElementById('status');
+const setStatus = (t) => { statusEl.textContent = t; };
+
+/* ------------------------------------------------------------------ */
+/*  Seeded value/simplex-ish noise                                     */
+/* ------------------------------------------------------------------ */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Classic 2D simplex noise with a seeded permutation table.
+class SimplexNoise {
+  constructor(seed) {
+    const rng = mulberry32(seed >>> 0);
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    for (let i = 255; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      [p[i], p[j]] = [p[j], p[i]];
+    }
+    this.perm = new Uint8Array(512);
+    this.permMod12 = new Uint8Array(512);
+    for (let i = 0; i < 512; i++) {
+      this.perm[i] = p[i & 255];
+      this.permMod12[i] = this.perm[i] % 12;
+    }
+  }
+  noise2D(xin, yin) {
+    const grad3 = SimplexNoise.grad3;
+    const F2 = 0.5 * (Math.sqrt(3) - 1);
+    const G2 = (3 - Math.sqrt(3)) / 6;
+    const { perm, permMod12 } = this;
+    let n0 = 0, n1 = 0, n2 = 0;
+    const s = (xin + yin) * F2;
+    const i = Math.floor(xin + s);
+    const j = Math.floor(yin + s);
+    const t = (i + j) * G2;
+    const X0 = i - t, Y0 = j - t;
+    const x0 = xin - X0, y0 = yin - Y0;
+    let i1, j1;
+    if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+    const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+    const ii = i & 255, jj = j & 255;
+    let t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 >= 0) { const gi0 = permMod12[ii + perm[jj]] * 3; t0 *= t0; n0 = t0 * t0 * (grad3[gi0] * x0 + grad3[gi0 + 1] * y0); }
+    let t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 >= 0) { const gi1 = permMod12[ii + i1 + perm[jj + j1]] * 3; t1 *= t1; n1 = t1 * t1 * (grad3[gi1] * x1 + grad3[gi1 + 1] * y1); }
+    let t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 >= 0) { const gi2 = permMod12[ii + 1 + perm[jj + 1]] * 3; t2 *= t2; n2 = t2 * t2 * (grad3[gi2] * x2 + grad3[gi2 + 1] * y2); }
+    return 70 * (n0 + n1 + n2); // ~[-1,1]
+  }
+}
+SimplexNoise.grad3 = new Float32Array([
+  1,1,0, -1,1,0, 1,-1,0, -1,-1,0,
+  1,0,1, -1,0,1, 1,0,-1, -1,0,-1,
+  0,1,1, 0,-1,1, 0,1,-1, 0,-1,-1
+]);
+
+/* ------------------------------------------------------------------ */
+/*  Parameters                                                         */
+/* ------------------------------------------------------------------ */
+const params = {
+  // grid — length sized for a ~32 s run at speed 50 (≈1600 m of path)
+  width: 120,
+  length: 1600,
+  segmentsX: 220,
+  segmentsZ: 1200,
+  // hills
+  seed: 1337,
+  mountainHeight: 26,
+  noiseScale: 0.012,
+  octaves: 4,
+  persistence: 0.46,
+  lacunarity: 1.5,
+  ridged: false,      // off = rounded hills; on = sharp ridges
+  smoothing: 1.4,     // >1 rounds the hilltops
+  warp: 6,            // domain warp for gently flowing forms
+  // path / valley
+  pathWidth: 2,
+  wallWidth: 21,
+  wallCurve: 0.8,     // exponent: >1 steeper walls near the floor
+  floorHeight: 0,
+  floorNoise: 0,
+  pathSlope: 14,      // net rise from front to back (units)
+  climbGrade: 10,     // altitude variation steepness, in % grade
+  climbWaves: 7,      // how many up/down hills along the whole run
+  windAmplitude: 22,
+  windFrequency: 0.9, // number of S-curves over the length
+  windPhase: 0.0,
+  // flow lines (the glowing contours that follow the path)
+  flowLines: true,
+  lineCount: 80,
+  lineLift: 0.4,
+  lineOpacity: 0.8,
+  lineWarm: '#ffe0a8',
+  lineCool: '#7db0ff',
+  includeLinesInExport: false,  // GLB stays a clean terrain mesh; use Splines OBJ for curves
+  // baked line texture — width = across the path (U), height = along it (V).
+  // Width must be big enough to resolve every line (e.g. > lineCount * 6).
+  texWidth: 2048,
+  texHeight: 4096,
+  texLineWidth: 2.5,
+  texGlow: 3,                   // soft glow radius (0 = crisp lines)
+  texMono: true,                // black lines on white (mask) instead of coloured glow
+  texTransparent: false,        // transparent background (else use texBackground)
+  texBackground: '#05060a',
+  texIncludeCenterline: false,
+  texFlipU: false,
+  texFlipV: true,               // matches C4D UV origin (bottom-left) so no manual flip needed
+  // camera fly / runner preview — speed 50 = the game speed
+  flyMode: true,
+  flySpeed: 50,
+  flyHeight: 4.5,
+  flyLookAhead: 16,
+  showRunner: true,
+  // look
+  showPath: false,
+  wireframe: false,
+  autoUpdate: true,
+};
+
+// height/length used as world units. noiseScale multiplies world coords.
+
+/* ------------------------------------------------------------------ */
+/*  Scene                                                              */
+/* ------------------------------------------------------------------ */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a1024);
+scene.fog = new THREE.Fog(0x0a1024, 220, 480);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 95, 210);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 20, 0);
+
+// lights
+const hemi = new THREE.HemisphereLight(0x8fb4ff, 0x331a2a, 0.9);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffe2bd, 2.0);
+sun.position.set(-80, 120, 60);
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0x6db0ff, 0.8);
+rim.position.set(90, 40, -120);
+scene.add(rim);
+
+/* ------------------------------------------------------------------ */
+/*  Color ramp (duotone-ish, echoing the reference)                    */
+/* ------------------------------------------------------------------ */
+const ramp = [
+  { t: 0.00, c: new THREE.Color(0xffcaa0) }, // warm valley floor
+  { t: 0.18, c: new THREE.Color(0xe98b66) },
+  { t: 0.42, c: new THREE.Color(0xb24b63) }, // red flank
+  { t: 0.66, c: new THREE.Color(0x6a5a9c) }, // purple
+  { t: 0.85, c: new THREE.Color(0x5b86d6) }, // blue
+  { t: 1.00, c: new THREE.Color(0xeaf2ff) }, // snowy peak
+];
+const floorColor = new THREE.Color(0xffd9a0);
+const tmpA = new THREE.Color(), tmpB = new THREE.Color();
+function rampColor(t, out) {
+  t = Math.min(1, Math.max(0, t));
+  for (let i = 0; i < ramp.length - 1; i++) {
+    const a = ramp[i], b = ramp[i + 1];
+    if (t <= b.t) {
+      const k = (t - a.t) / (b.t - a.t);
+      tmpA.copy(a.c); tmpB.copy(b.c);
+      return out.copy(tmpA).lerp(tmpB, k);
+    }
+  }
+  return out.copy(ramp[ramp.length - 1].c);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Terrain build                                                      */
+/* ------------------------------------------------------------------ */
+let noise = new SimplexNoise(params.seed);
+
+const smoothstep = (e0, e1, x) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+// centerline x at a given z
+function pathCenterX(z) {
+  const L = params.length;
+  const u = (z + L / 2) / L; // 0..1 front->back
+  return params.windAmplitude * Math.sin(u * Math.PI * 2 * params.windFrequency + params.windPhase);
+}
+// rolling up/down altitude offset along the run, sized so the steepest
+// section is about `climbGrade` percent (rise / horizontal run).
+function altitudeProfile(u, L) {
+  const N = params.climbWaves;
+  if (params.climbGrade <= 0 || N <= 0) return 0;
+  const lambda = L / N;                                    // wavelength (world units)
+  const A = (params.climbGrade / 100) * lambda / (2 * Math.PI); // amplitude for that grade
+  return A * Math.sin(2 * Math.PI * N * u + params.windPhase);
+}
+
+// floor height at a given z: net climb toward the back + rolling up/down
+function floorYAt(z) {
+  const L = params.length;
+  const u = (z + L / 2) / L;
+  return params.floorHeight
+    + params.pathSlope * smoothstep(0, 1, u)
+    + altitudeProfile(u, L);
+}
+
+// fractal noise in [0,1]
+function fbm(x, z) {
+  let amp = 1, freq = 1, sum = 0, norm = 0;
+  // domain warp so ridges flow rather than look like static blobs
+  if (params.warp > 0) {
+    const wx = noise.noise2D(x * params.noiseScale * 0.5 + 11.3, z * params.noiseScale * 0.5);
+    const wz = noise.noise2D(x * params.noiseScale * 0.5, z * params.noiseScale * 0.5 + 7.7);
+    x += wx * params.warp / params.noiseScale * 0.15;
+    z += wz * params.warp / params.noiseScale * 0.15;
+  }
+  for (let o = 0; o < params.octaves; o++) {
+    let n = noise.noise2D(x * params.noiseScale * freq, z * params.noiseScale * freq);
+    if (params.ridged) { n = 1 - Math.abs(n); n *= n; }
+    else { n = n * 0.5 + 0.5; }
+    sum += n * amp;
+    norm += amp;
+    amp *= params.persistence;
+    freq *= params.lacunarity;
+  }
+  let h = sum / norm; // 0..1
+  // smoothing>1 rounds the tops (gentle hills); <1 sharpens
+  if (params.smoothing !== 1) h = Math.pow(h, params.smoothing);
+  return h;
+}
+
+// full height + which fraction of mountain is present (0 on path, 1 on peaks)
+function sample(x, z) {
+  const cx = pathCenterX(z);
+  const dist = Math.abs(x - cx);
+  const half = params.pathWidth / 2;
+  let valley = smoothstep(half, half + params.wallWidth, dist); // 0 on path, 1 far
+  valley = Math.pow(valley, params.wallCurve);
+  const floorY = floorYAt(z);
+  const mountain = fbm(x, z) * params.mountainHeight;
+  // taper mountains down at the outer x edges so the slab edges aren't a cliff wall
+  const edge = 1 - smoothstep(params.width * 0.5 - 6, params.width * 0.5, Math.abs(x));
+  const groundNoise = (noise.noise2D(x * 0.08, z * 0.08)) * params.floorNoise;
+  const y = floorY + groundNoise * (1 - valley) + mountain * valley * (0.25 + 0.75 * edge + 0.0);
+  return { y, valley };
+}
+
+let terrain = null;
+let pathLine = null;
+let flowGroup = null;
+let flowCurve = null;     // CatmullRom along the centerline, for the camera/runner
+let curveLen = 1;
+
+// runner marker (the object that travels the path in your game)
+const runner = new THREE.Mesh(
+  new THREE.SphereGeometry(1.6, 24, 16),
+  new THREE.MeshStandardMaterial({ color: 0xffd089, emissive: 0xffae4d, emissiveIntensity: 1.4, roughness: 0.4 })
+);
+runner.name = 'Runner';
+scene.add(runner);
+const runnerGlow = new THREE.PointLight(0xffd089, 8, 60, 2);
+runner.add(runnerGlow);
+let runT = 0;
+
+function buildTerrain() {
+  const t0 = performance.now();
+  const { width, length, segmentsX, segmentsZ } = params;
+  const nx = segmentsX + 1, nz = segmentsZ + 1;
+  const positions = new Float32Array(nx * nz * 3);
+  const colors = new Float32Array(nx * nz * 3);
+  const uvs = new Float32Array(nx * nz * 2); // planar UVs over the footprint
+
+  const col = new THREE.Color();
+  let k = 0, t = 0;
+  for (let j = 0; j < nz; j++) {
+    const z = -length / 2 + (j / segmentsZ) * length;
+    for (let i = 0; i < nx; i++) {
+      const x = -width / 2 + (i / segmentsX) * width;
+      const { y, valley } = sample(x, z);
+      positions[k] = x; positions[k + 1] = y; positions[k + 2] = z;
+
+      // color: blend a glowing floor color near the path into the height ramp
+      const hRatio = THREE.MathUtils.clamp((y - params.floorHeight) / (params.mountainHeight || 1), 0, 1);
+      rampColor(hRatio, col);
+      const onPath = 1 - valley; // 1 on path
+      col.lerp(floorColor, onPath * 0.85);
+      colors[k] = col.r; colors[k + 1] = col.g; colors[k + 2] = col.b;
+      uvs[t] = i / segmentsX; uvs[t + 1] = j / segmentsZ;
+      k += 3; t += 2;
+    }
+  }
+
+  // indices
+  const index = new Uint32Array(segmentsX * segmentsZ * 6);
+  let p = 0;
+  for (let j = 0; j < segmentsZ; j++) {
+    for (let i = 0; i < segmentsX; i++) {
+      const a = j * nx + i;
+      const b = a + 1;
+      const c = a + nx;
+      const d = c + 1;
+      index[p++] = a; index[p++] = c; index[p++] = b;
+      index[p++] = b; index[p++] = c; index[p++] = d;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(new THREE.BufferAttribute(index, 1));
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.92,
+    metalness: 0.0,
+    wireframe: params.wireframe,
+    flatShading: false,
+  });
+
+  if (terrain) { terrain.geometry.dispose(); terrain.material.dispose(); scene.remove(terrain); }
+  terrain = new THREE.Mesh(geo, mat);
+  terrain.name = 'Terrain';
+  scene.add(terrain);
+
+  buildPathLine();
+  buildFlowLines();
+
+  // path curve for the camera / runner
+  flowCurve = new THREE.CatmullRomCurve3(getCenterlinePoints(200));
+  curveLen = flowCurve.getLength();
+
+  const ms = (performance.now() - t0).toFixed(0);
+  const secs = (curveLen / params.flySpeed).toFixed(1);
+  setStatus(`${nx * nz} verts · ${segmentsX * segmentsZ * 2} tris · path ${curveLen | 0} m ≈ ${secs}s @ speed ${params.flySpeed} · ${ms} ms`);
+}
+
+function getCenterlinePoints(n = 400) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const z = -params.length / 2 + (i / n) * params.length;
+    const x = pathCenterX(z);
+    const y = floorYAt(z) + 0.6; // sit just above the floor
+    pts.push(new THREE.Vector3(x, y, z));
+  }
+  return pts;
+}
+
+function buildPathLine() {
+  if (pathLine) { pathLine.geometry.dispose(); pathLine.material.dispose(); scene.remove(pathLine); pathLine = null; }
+  if (!params.showPath) return;
+  const pts = getCenterlinePoints(400);
+  const g = new THREE.BufferGeometry().setFromPoints(pts);
+  const m = new THREE.LineBasicMaterial({ color: 0xffd089 });
+  pathLine = new THREE.Line(g, m);
+  pathLine.name = 'PathCenterline';
+  scene.add(pathLine);
+}
+
+// Glowing contour lines that run the length of the terrain, parallel to the
+// path so they drape over the hills and follow the trail — like the reference.
+function buildFlowLines() {
+  if (flowGroup) {
+    flowGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    scene.remove(flowGroup);
+    flowGroup = null;
+  }
+  if (!params.flowLines || params.lineCount < 2) return;
+
+  flowGroup = new THREE.Group();
+  flowGroup.name = 'FlowLines';
+
+  const warm = new THREE.Color(params.lineWarm);
+  const cool = new THREE.Color(params.lineCool);
+  const halfW = params.width / 2;
+  const nz = Math.max(60, params.segmentsZ);
+  const c = new THREE.Color();
+
+  for (let li = 0; li < params.lineCount; li++) {
+    // lateral offset from the path centerline, evenly spread across the width
+    const f = params.lineCount === 1 ? 0 : (li / (params.lineCount - 1)) * 2 - 1; // -1..1
+    const s = f * halfW;
+    const lateral = Math.abs(f); // 0 at path, 1 at edges
+
+    const pos = new Float32Array((nz + 1) * 3);
+    const col = new Float32Array((nz + 1) * 3);
+    let k = 0;
+    for (let j = 0; j <= nz; j++) {
+      const z = -params.length / 2 + (j / nz) * params.length;
+      const cx = pathCenterX(z);
+      const x = THREE.MathUtils.clamp(cx + s, -halfW, halfW);
+      const r = sample(x, z);
+      pos[k] = x; pos[k + 1] = r.y + params.lineLift; pos[k + 2] = z;
+
+      // warm & bright near the path, cooler/dimmer toward the edges
+      c.copy(warm).lerp(cool, lateral);
+      const bright = (1 - r.valley) * 0.9 + (1 - lateral) * 0.3 + 0.15;
+      c.multiplyScalar(Math.min(1.6, bright));
+      col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
+      k += 3;
+    }
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const m = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: params.lineOpacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    flowGroup.add(new THREE.Line(g, m));
+  }
+  scene.add(flowGroup);
+}
+
+function updateLineOpacity() {
+  if (!flowGroup) return;
+  flowGroup.traverse(o => { if (o.material) o.material.opacity = params.lineOpacity; });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Export                                                             */
+/* ------------------------------------------------------------------ */
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportGLB() {
+  if (!terrain) return;
+  setStatus('exporting GLB…');
+  const group = new THREE.Group();
+  const mesh = new THREE.Mesh(terrain.geometry, terrain.material.clone());
+  mesh.name = 'Terrain';
+  group.add(mesh);
+  if (params.showPath && pathLine) group.add(pathLine.clone());
+  if (params.includeLinesInExport && flowGroup) group.add(flowGroup.clone());
+  new GLTFExporter().parse(group, (res) => {
+    download(new Blob([res], { type: 'model/gltf-binary' }), 'valley_terrain.glb');
+    setStatus('saved valley_terrain.glb');
+  }, (err) => { console.error(err); setStatus('GLB export failed (see console)'); },
+  { binary: true, onlyVisible: true });
+}
+
+function exportOBJ() {
+  if (!terrain) return;
+  setStatus('exporting OBJ…');
+  const mesh = new THREE.Mesh(terrain.geometry, terrain.material);
+  mesh.name = 'Terrain';
+  const text = new OBJExporter().parse(mesh);
+  download(new Blob([text], { type: 'text/plain' }), 'valley_terrain.obj');
+  setStatus('saved valley_terrain.obj (vertex colors are GLB-only)');
+}
+
+// ---- splines: centerline + flow lines as OBJ polylines (no faces) --------
+function exportSplinesOBJ() {
+  const group = new THREE.Group();
+  const cl = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(getCenterlinePoints(500)),
+    new THREE.LineBasicMaterial()
+  );
+  cl.name = 'PathCenterline';
+  group.add(cl);
+  if (flowGroup) {
+    flowGroup.children.forEach((ln, i) => {
+      const c = new THREE.Line(ln.geometry.clone(), new THREE.LineBasicMaterial());
+      c.name = 'FlowLine_' + String(i).padStart(3, '0');
+      group.add(c);
+    });
+  }
+  const text = new OBJExporter().parse(group);
+  download(new Blob([text], { type: 'text/plain' }), 'valley_splines.obj');
+  setStatus(`saved valley_splines.obj — ${group.children.length} polyline curves`);
+}
+
+// ---- bake the flow lines into a top-down texture (PNG) --------------------
+// Maps the terrain footprint (X,Z) to the image, matching the mesh's planar
+// UVs, so the PNG drops straight onto the terrain as a separate line layer.
+function bakeLinesTexture() {
+  const W = params.width, L = params.length;
+  // width = across the path (must resolve every line), height = along the path
+  const cw = Math.min(8192, Math.max(64, Math.round(params.texWidth)));
+  const ch = Math.min(16384, Math.max(64, Math.round(params.texHeight)));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+
+  if (params.texMono) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cw, ch); }
+  else if (!params.texTransparent) { ctx.fillStyle = params.texBackground; ctx.fillRect(0, 0, cw, ch); }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // scale line width to the across-path resolution so it reads consistently
+  const wScale = cw / 2048;
+
+  // world (x,z) -> canvas px. Flip toggles align with the target app's UV origin.
+  const px = (x) => { const u = (x + W / 2) / W; return (params.texFlipU ? 1 - u : u) * cw; };
+  const py = (z) => { const v = (z + L / 2) / L; return (params.texFlipV ? v : 1 - v) * ch; };
+
+  const strokePolyline = (pos, hexColor, widthMul) => {
+    ctx.beginPath();
+    ctx.moveTo(px(pos.getX(0)), py(pos.getZ(0)));
+    for (let i = 1; i < pos.count; i++) ctx.lineTo(px(pos.getX(i)), py(pos.getZ(i)));
+    ctx.strokeStyle = hexColor;
+    ctx.lineWidth = params.texLineWidth * wScale * widthMul;
+    if (params.texGlow > 0) {
+      ctx.shadowColor = hexColor;
+      ctx.shadowBlur = params.texGlow * wScale;
+      ctx.stroke();           // glow pass
+      ctx.shadowBlur = 0;
+    }
+    ctx.stroke();             // crisp core
+  };
+
+  const tmp = new THREE.Color();
+  const hexOf = (col, idx) => {
+    tmp.setRGB(col.getX(idx), col.getY(idx), col.getZ(idx));
+    return '#' + tmp.getHexString();
+  };
+
+  if (flowGroup) {
+    flowGroup.children.forEach((ln) => {
+      const pos = ln.geometry.getAttribute('position');
+      const col = ln.geometry.getAttribute('color');
+      const c = params.texMono ? '#000000' : hexOf(col, (pos.count / 2) | 0); // mid-line colour
+      strokePolyline(pos, c, 1);
+    });
+  }
+  if (params.texIncludeCenterline) {
+    const pts = getCenterlinePoints(500);
+    const fake = { count: pts.length, getX: (i) => pts[i].x, getZ: (i) => pts[i].z };
+    strokePolyline(fake, params.texMono ? '#000000' : params.lineWarm, 1.8);
+  }
+
+  canvas.toBlob((b) => {
+    download(b, 'valley_lines.png');
+    setStatus(`saved valley_lines.png — ${cw}x${ch}px line texture`);
+  }, 'image/png');
+}
+
+// ---- Cinema 4D: native spline objects via a Script-Manager .py ------------
+function vecListToPy(pts) {
+  let s = '[';
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    s += '[' + p.x.toFixed(2) + ',' + p.y.toFixed(2) + ',' + p.z.toFixed(2) + ']';
+    if (i < pts.length - 1) s += ',';
+  }
+  return s + ']';
+}
+
+function exportC4DSplines() {
+  const entries = [];
+  entries.push(['PathCenterline', getCenterlinePoints(500)]);
+  if (flowGroup) {
+    flowGroup.children.forEach((ln, i) => {
+      const pos = ln.geometry.getAttribute('position');
+      const n = pos.count;
+      const step = Math.max(1, Math.floor(n / 250)); // cap ~250 pts/spline
+      const pts = [];
+      for (let j = 0; j < n; j += step) pts.push({ x: pos.getX(j), y: pos.getY(j), z: pos.getZ(j) });
+      if ((n - 1) % step !== 0) pts.push({ x: pos.getX(n - 1), y: pos.getY(n - 1), z: pos.getZ(n - 1) });
+      entries.push(['FlowLine_' + String(i).padStart(3, '0'), pts]);
+    });
+  }
+
+  let py = '';
+  py += '# Cinema 4D spline importer - generated by Valley Terrain Generator\n';
+  py += '# In C4D: Extensions > Script Manager > paste this file > Execute.\n';
+  py += '# Creates native SplineObjects under a "ValleySplines" null.\n';
+  py += 'import c4d\nfrom c4d import Vector\n\n';
+  py += 'FLIP_Z = True   # C4D is left-handed; this matches the default GLB terrain import. Set False if mirrored.\n';
+  py += 'SCALE  = 100.0  # C4D imports GLB in cm (meters x100), so splines need x100 to match. Use 1.0 if your terrain is at raw scale.\n\n';
+  py += 'SPLINES = [\n';
+  for (const [name, pts] of entries) py += '    (' + JSON.stringify(name) + ', ' + vecListToPy(pts) + '),\n';
+  py += ']\n\n';
+  py += [
+    'def build(name, pts):',
+    '    sp = c4d.SplineObject(len(pts), c4d.SPLINETYPE_LINEAR)',
+    '    sp.SetName(name)',
+    '    for i, p in enumerate(pts):',
+    '        z = -p[2] if FLIP_Z else p[2]',
+    '        sp.SetPoint(i, Vector(p[0] * SCALE, p[1] * SCALE, z * SCALE))',
+    '    sp.Message(c4d.MSG_UPDATE)',
+    '    return sp',
+    '',
+    'def main():',
+    '    doc = c4d.documents.GetActiveDocument()',
+    '    doc.StartUndo()',
+    '    grp = c4d.BaseObject(c4d.Onull)',
+    '    grp.SetName("ValleySplines")',
+    '    doc.InsertObject(grp)',
+    '    doc.AddUndo(c4d.UNDOTYPE_NEWOBJ, grp)',
+    '    for name, pts in SPLINES:',
+    '        sp = build(name, pts)',
+    '        sp.InsertUnder(grp)',
+    '        doc.AddUndo(c4d.UNDOTYPE_NEWOBJ, sp)',
+    '    doc.EndUndo()',
+    '    c4d.EventAdd()',
+    '',
+    "if __name__ == '__main__':",
+    '    main()',
+    '',
+  ].join('\n');
+
+  download(new Blob([py], { type: 'text/x-python' }), 'valley_splines_c4d.py');
+  setStatus(`saved valley_splines_c4d.py — ${entries.length} native C4D splines`);
+}
+
+// ---- settings (presets) ---------------------------------------------------
+function exportSettings() {
+  const data = JSON.stringify(params, null, 2);
+  download(new Blob([data], { type: 'application/json' }), 'valley_settings.json');
+  setStatus('saved valley_settings.json — load it back via Import settings');
+}
+
+const settingsInput = document.createElement('input');
+settingsInput.type = 'file';
+settingsInput.accept = '.json,application/json';
+settingsInput.style.display = 'none';
+document.body.appendChild(settingsInput);
+settingsInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const loaded = JSON.parse(reader.result);
+      let n = 0;
+      for (const k in loaded) { if (k in params) { params[k] = loaded[k]; n++; } }
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      noise = new SimplexNoise(params.seed);
+      buildTerrain();
+      controls.enabled = !params.flyMode;
+      runT = 0;
+      setStatus(`loaded ${file.name} — applied ${n} settings`);
+    } catch (err) {
+      console.error(err);
+      setStatus('could not read settings JSON (see console)');
+    }
+  };
+  reader.readAsText(file);
+  settingsInput.value = '';
+});
+function importSettings() { settingsInput.click(); }
+
+function exportPathJSON() {
+  const pts = getCenterlinePoints(500).map(p => ({ x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4) }));
+  const data = { space: 'right-handed Y-up (Three.js)', count: pts.length, points: pts };
+  download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'valley_path.json');
+  setStatus('saved valley_path.json (centerline points)');
+}
+
+/* ------------------------------------------------------------------ */
+/*  GUI                                                                */
+/* ------------------------------------------------------------------ */
+function regen() { noise = new SimplexNoise(params.seed); buildTerrain(); }
+const maybe = () => { if (params.autoUpdate) buildTerrain(); };
+
+const gui = new GUI({ title: 'Terrain' });
+
+const fGrid = gui.addFolder('Grid / size');
+fGrid.add(params, 'width', 40, 400, 1).onFinishChange(maybe);
+fGrid.add(params, 'length', 40, 3000, 1).onFinishChange(maybe);
+fGrid.add(params, 'segmentsX', 20, 600, 1).onFinishChange(maybe).name('resolution X');
+fGrid.add(params, 'segmentsZ', 20, 3000, 1).onFinishChange(maybe).name('resolution Z');
+
+const fMtn = gui.addFolder('Mountains');
+fMtn.add(params, 'seed', 0, 99999, 1).onFinishChange(regen);
+fMtn.add({ randomize: () => { params.seed = (Math.random() * 99999) | 0; gui.controllersRecursive().forEach(c => c.updateDisplay()); regen(); } }, 'randomize').name('🎲 random seed');
+fMtn.add(params, 'mountainHeight', 0, 200, 1).onChange(maybe);
+fMtn.add(params, 'noiseScale', 0.003, 0.06, 0.001).onChange(maybe);
+fMtn.add(params, 'octaves', 1, 8, 1).onChange(maybe);
+fMtn.add(params, 'persistence', 0.2, 0.8, 0.01).onChange(maybe);
+fMtn.add(params, 'lacunarity', 1.5, 3.0, 0.01).onChange(maybe);
+fMtn.add(params, 'ridged').onChange(maybe).name('ridged (sharp ridges)');
+fMtn.add(params, 'warp', 0, 20, 0.5).onChange(maybe).name('domain warp');
+fMtn.add(params, 'smoothing', 0.5, 3, 0.05).onChange(maybe).name('hill roundness');
+
+const fPath = gui.addFolder('Path / valley');
+fPath.add(params, 'pathWidth', 2, 60, 0.5).onChange(maybe);
+fPath.add(params, 'wallWidth', 4, 120, 0.5).onChange(maybe).name('wall ramp width');
+fPath.add(params, 'wallCurve', 0.5, 4, 0.1).onChange(maybe).name('wall steepness');
+fPath.add(params, 'floorHeight', -20, 40, 0.5).onChange(maybe);
+fPath.add(params, 'floorNoise', 0, 8, 0.1).onChange(maybe).name('floor bumpiness');
+fPath.add(params, 'pathSlope', 0, 120, 1).onChange(maybe).name('net climb (units)');
+fPath.add(params, 'climbGrade', 0, 40, 0.5).onChange(maybe).name('altitude grade %');
+fPath.add(params, 'climbWaves', 0, 30, 1).onChange(maybe).name('up/down hills');
+fPath.add(params, 'windAmplitude', 0, 80, 1).onChange(maybe).name('wind amplitude');
+fPath.add(params, 'windFrequency', 0, 4, 0.05).onChange(maybe).name('wind S-curves');
+fPath.add(params, 'windPhase', 0, 6.28, 0.01).onChange(maybe).name('wind phase');
+
+const fLine = gui.addFolder('Flow lines');
+fLine.add(params, 'flowLines').onChange(buildFlowLines).name('show flow lines');
+fLine.add(params, 'lineCount', 2, 240, 1).onFinishChange(buildFlowLines).name('line count');
+fLine.add(params, 'lineLift', 0, 3, 0.05).onChange(buildFlowLines).name('lift off surface');
+fLine.add(params, 'lineOpacity', 0.05, 1, 0.01).onChange(updateLineOpacity).name('opacity');
+fLine.addColor(params, 'lineWarm').onChange(buildFlowLines).name('warm (near path)');
+fLine.addColor(params, 'lineCool').onChange(buildFlowLines).name('cool (edges)');
+fLine.add(params, 'includeLinesInExport').name('bake into terrain GLB');
+
+const fCam = gui.addFolder('Camera fly / runner');
+fCam.add(params, 'flyMode').name('🎥 follow path').onChange(() => {
+  controls.enabled = !params.flyMode;
+  if (!params.flyMode) controls.target.set(0, 20, 0);
+});
+fCam.add(params, 'flySpeed', 2, 80, 1).name('speed');
+fCam.add(params, 'flyHeight', 0.5, 30, 0.5).name('camera height');
+fCam.add(params, 'flyLookAhead', 2, 60, 1).name('look ahead');
+fCam.add(params, 'showRunner').name('show runner');
+fCam.add({ restart: () => { runT = 0; } }, 'restart').name('⏮ restart run');
+
+const fLook = gui.addFolder('Display');
+fLook.add(params, 'showPath').onChange(buildPathLine).name('show centerline');
+fLook.add(params, 'wireframe').onChange(() => { if (terrain) terrain.material.wireframe = params.wireframe; });
+fLook.add(params, 'autoUpdate').name('auto-rebuild');
+fLook.add({ rebuild: buildTerrain }, 'rebuild').name('↻ rebuild now');
+
+const fExp = gui.addFolder('Export');
+fExp.add({ glb: exportGLB }, 'glb').name('⬇ Terrain GLB');
+fExp.add({ obj: exportOBJ }, 'obj').name('⬇ Terrain OBJ');
+fExp.add({ c4d: exportC4DSplines }, 'c4d').name('⬇ C4D Splines (.py) ★');
+fExp.add({ spl: exportSplinesOBJ }, 'spl').name('⬇ Splines OBJ (other DCCs)');
+fExp.add({ png: bakeLinesTexture }, 'png').name('⬇ Lines texture (.png)');
+fExp.add({ json: exportPathJSON }, 'json').name('⬇ Path JSON (points)');
+
+const fTex = gui.addFolder('Line texture').close();
+fTex.add(params, 'texWidth', 256, 8192, 128).name('width px (across path)');
+fTex.add(params, 'texHeight', 256, 16384, 128).name('height px (along path)');
+fTex.add(params, 'texLineWidth', 0.5, 12, 0.5).name('line width (px)');
+fTex.add(params, 'texGlow', 0, 40, 1).name('glow radius');
+fTex.add(params, 'texMono').name('black & white (mask)');
+fTex.add(params, 'texTransparent').name('transparent bg');
+fTex.addColor(params, 'texBackground').name('background (if opaque)');
+fTex.add(params, 'texIncludeCenterline').name('include centerline');
+fTex.add(params, 'texFlipU').name('flip U (horizontal)');
+fTex.add(params, 'texFlipV').name('flip V (C4D default)');
+
+const fSet = gui.addFolder('Settings / presets');
+fSet.add({ save: exportSettings }, 'save').name('⬇ Export settings (.json)');
+fSet.add({ load: importSettings }, 'load').name('⬆ Import settings (.json)');
+
+/* ------------------------------------------------------------------ */
+/*  Loop                                                               */
+/* ------------------------------------------------------------------ */
+buildTerrain();
+controls.enabled = !params.flyMode;
+
+const hud = document.getElementById('hud');
+const pad = (n) => String(n).padStart(2, '0');
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const clock = new THREE.Clock();
+const _p = new THREE.Vector3();
+const _a = new THREE.Vector3();
+let flyTime = 0;
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+
+  if (flowCurve && (params.showRunner || params.flyMode)) {
+    const prev = runT;
+    runT = (runT + (params.flySpeed * dt) / curveLen) % 1;
+    if (runT < prev) flyTime = 0;            // wrapped → new lap
+    flowCurve.getPointAt(runT, _p);
+    runner.position.copy(_p);
+  }
+  runner.visible = params.showRunner;
+
+  if (params.flyMode && flowCurve) {
+    flyTime += dt;
+    flowCurve.getPointAt(runT, _p);
+    flowCurve.getPointAt(Math.min(0.999, runT + params.flyLookAhead / curveLen), _a);
+    camera.position.set(_p.x, _p.y + params.flyHeight, _p.z);
+    camera.lookAt(_a.x, _a.y + params.flyHeight * 0.5, _a.z);
+    hud.style.display = 'block';
+    const dist = Math.round(runT * curveLen);
+    hud.innerHTML = `DISTANCE <b>${dist} M</b> &nbsp;·&nbsp; TIME <b>${pad((flyTime / 60) | 0)}:${pad((flyTime % 60) | 0)}</b> &nbsp;·&nbsp; SPEED <b>${params.flySpeed}</b>`;
+  } else {
+    hud.style.display = 'none';
+    controls.update();
+  }
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
