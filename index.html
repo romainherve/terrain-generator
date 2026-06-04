@@ -55,6 +55,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 
 const statusEl = document.getElementById('status');
 const setStatus = (t) => { statusEl.textContent = t; };
@@ -129,30 +135,42 @@ const params = {
   length: 1600,
   segmentsX: 220,
   segmentsZ: 1200,
-  // hills
+  // hills — tuned toward soft, billowing dunes (reference relief)
   seed: 1337,
-  mountainHeight: 26,
-  noiseScale: 0.012,
+  mountainHeight: 34,
+  noiseScale: 0.010,
   octaves: 4,
-  persistence: 0.46,
-  lacunarity: 1.5,
+  persistence: 0.45,
+  lacunarity: 1.9,
   ridged: false,      // off = rounded hills; on = sharp ridges
-  smoothing: 1.4,     // >1 rounds the hilltops
-  warp: 6,            // domain warp for gently flowing forms
+  smoothing: 1.8,     // >1 rounds the hilltops into dunes
+  warp: 8,            // domain warp for gently flowing forms
+  // height growth along the run (low dunes front -> tall mountains back)
+  growthFront: 0.5,   // amplitude multiplier at the start
+  growthBack: 2.4,    // amplitude multiplier at the far end
+  growthCurve: 1.7,   // >1 stays low longer then ramps up near the back
   // path / valley
-  pathWidth: 2,
-  wallWidth: 21,
-  wallCurve: 0.8,     // exponent: >1 steeper walls near the floor
+  pathWidth: 4,
+  wallWidth: 38,
+  wallCurve: 1.0,     // exponent: >1 steeper walls near the floor
   floorHeight: 0,
   floorNoise: 0,
   pathSlope: 14,      // net rise from front to back (units)
+  levelStart: 0,      // overall ground level at the start (can be > end to descend)
+  levelEnd: 0,        // overall ground level at the end
+  levelCurve: 'linear', // shape of the start->end ramp
+  levelCurvePower: 2.5,
   climbGrade: 10,     // altitude variation steepness, in % grade
   climbWaves: 7,      // how many up/down hills along the whole run
   windAmplitude: 22,
   windFrequency: 0.9, // number of S-curves over the length
   windPhase: 0.0,
-  // flow lines (the glowing contours that follow the path)
-  flowLines: true,
+  // flow lines (the glowing contours that follow the path) — off by default now
+  // that the duotone shader draws striations directly on the surface
+  flowLines: false,
+  lineMode: 'path',     // 'path' = parallel to trail, 'contour' = topographic iso-lines
+  contourLevels: 28,    // number of elevation bands (contour mode)
+  contourGridX: 48,     // sampling resolution across the width (contour smoothness)
   lineCount: 80,
   lineLift: 0.4,
   lineOpacity: 0.8,
@@ -177,6 +195,107 @@ const params = {
   flyHeight: 4.5,
   flyLookAhead: 16,
   showRunner: true,
+  focalLength: 35,      // mm (full-frame equivalent) -> camera FOV
+  frameRatio: 'off',    // letterbox the view to an aspect ratio
+  frameOpacity: 1.0,
+  // surface shader (the duotone dune look)
+  surfaceStyle: 'duotone',   // 'duotone' | 'standard'
+  shWarm: '#d2382a',         // sunlit dune faces
+  shCool: '#16307e',         // shaded dune faces
+  shPath: '#ffcf8a',         // glowing path
+  shLineColor: '#ffe9c8',    // striation tint
+  shLineFreq: 80,            // density of topographic striations
+  shLineWidth: 0.07,         // striation thickness
+  shLineIntensity: 0.28,
+  shLineBlend: 'add',       // striation blend mode
+  shLightAz: 0.5,            // light azimuth (radians) — sets which faces go warm
+  shBlend: 0.42,            // red<->blue blend softness (0 hard, 0.5 full gradient)
+  shBalance: 0.0,          // bias the warm/cool balance
+  // how the warm/cool is mapped onto the terrain
+  duotoneMode: 'facing',    // facing | noise | height
+  duoNoiseType: 'fbm',      // fbm | ridged | billow | cellular
+  duoNoiseScale: 0.02,
+  duoNoiseWarp: 0.0,
+  duoHeight: 0.0,           // blend any mode toward pure height mapping
+  duoHeightLocal: true,     // height = local per-dune (true) vs whole-mesh world height (false)
+  // fresnel rim light
+  shRimColor: '#bcd4ff',
+  shRimPower: 3.2,
+  shRimIntensity: 0.6,
+  // gradient sky (3 stops + noise)
+  skyTop: '#070f30',
+  skyMid: '#1b3a78',
+  skyHorizon: '#5a78b4',
+  skyHorizonY: 0.22,   // where horizon blends into mid
+  skyMidY: 0.62,       // where mid blends into top
+  skyNoise: 0.05,      // break up the gradient banding
+  skyNoiseScale: 3.0,
+  // procedural clouds
+  clouds: true,
+  cloudColor: '#cdd9f5',
+  cloudCoverage: 0.5,  // 0 clear .. 1 overcast
+  cloudDensity: 0.85,
+  cloudScale: 1.3,
+  cloudSoftness: 0.3,
+  cloudSpeed: 1.0,
+  cloudHeight: 0.35,
+  // trail (a bundle of glowing light lines reflecting on the floor)
+  trailWidth: 1.6,      // bright central core half-width (world units)
+  trailSpill: 24,       // how far the bundle of light spills onto the dunes
+  trailGlow: 1.4,       // overall intensity
+  trailSpacing: 2.6,    // distance between the individual glowing lines
+  trailLineWidth: 0.22, // sharpness of each line (fraction of spacing)
+  trailClear: 1.6,      // striation clear-zone width vs the bundle spread (>1 = wider)
+  // animated flow fog (drifting luminous wisps along the path)
+  flowFog: true,
+  flowColor: '#cfe0ff',
+  flowIntensity: 0.45,
+  flowDensity: 0.14,    // lateral band frequency
+  flowScale: 0.02,      // lengthwise wisp scale
+  flowSpeed: 0.6,       // drift speed along the path
+  flowReach: 45,        // how far the fog spreads from the path (small = hugs the trail)
+  // sun
+  sunEnable: true,
+  sunAzimuth: 28,       // degrees around
+  sunElevation: 16,     // degrees above horizon
+  sunIntensity: 1.0,
+  sunColor: '#ffe4bd',
+  sunAmbient: 0.55,     // fill so shaded faces aren't black
+  sunSize: 0.05,        // angular radius of the disc (radians)
+  sunHalo: 0.5,
+  sunHaloPow: 80,       // halo tightness
+  sunDiscVisible: true, // show the sun disc/halo in the sky
+  sunDriveDuotone: false, // link the red/blue split to the sun direction
+  // sun shadows (heightfield self-shadowing)
+  shadowEnable: true,
+  shadowHard: false,    // crisp cast shadows instead of soft penumbra
+  shadowStrength: 0.8,
+  shadowDist: 140,      // how far to look for occluding dunes
+  shadowSoft: 0.18,     // penumbra softness (smaller = sharper)
+  shadowBias: 0.6,
+  // fog / distance haze
+  fogColor: '#0b1330',
+  fogNear: 200,
+  fogFar: 1200,
+  // post-processing
+  post: true,
+  toneMapping: 'ACESFilmic',
+  exposure: 1.15,
+  outputGain: 1.0,      // overall image brightness (post)
+  bloomStrength: 0.75,
+  bloomRadius: 0.6,
+  bloomThreshold: 0.82,
+  vignette: 0.7,
+  // colour grading / image treatment
+  look: 'none',
+  brightness: 1.0,
+  contrast: 1.0,
+  saturation: 1.12,
+  vibrance: 0.0,
+  temperature: 0.0,
+  tint: 0.0,
+  hue: 0.0,
+  grain: 0.0,
   // look
   showPath: false,
   wireframe: false,
@@ -197,15 +316,231 @@ renderer.toneMappingExposure = 1.15;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a1024);
-scene.fog = new THREE.Fog(0x0a1024, 220, 480);
+scene.fog = new THREE.Fog(0x142a6e, 600, 1400);
 
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 2000);
+// gradient sky dome (follows the camera so it's always the backdrop)
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: {
+    uTop: { value: new THREE.Color(params.skyTop) },
+    uMid: { value: new THREE.Color(params.skyMid) },
+    uHorizon: { value: new THREE.Color(params.skyHorizon) },
+    uHorizonY: { value: params.skyHorizonY },
+    uMidY: { value: params.skyMidY },
+    uNoise: { value: params.skyNoise },
+    uNoiseScale: { value: params.skyNoiseScale },
+    uClouds: { value: params.clouds ? 1 : 0 },
+    uCloudColor: { value: new THREE.Color(params.cloudColor) },
+    uCloudCover: { value: params.cloudCoverage },
+    uCloudDensity: { value: params.cloudDensity },
+    uCloudScale: { value: params.cloudScale },
+    uCloudSoft: { value: params.cloudSoftness },
+    uCloudSpeed: { value: params.cloudSpeed },
+    uCloudHeight: { value: params.cloudHeight },
+    uSunDisc: { value: (params.sunEnable && params.sunDiscVisible) ? 1 : 0 },
+    uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+    uSunColor: { value: new THREE.Color(params.sunColor) },
+    uSunSize: { value: params.sunSize },
+    uSunHalo: { value: params.sunHalo },
+    uSunHaloPow: { value: params.sunHaloPow },
+    uTime: { value: 0 },
+  },
+  vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform vec3 uTop, uMid, uHorizon, uCloudColor, uSunColor, uSunDir;
+    uniform float uHorizonY, uMidY, uNoise, uNoiseScale;
+    uniform float uClouds, uCloudCover, uCloudDensity, uCloudScale, uCloudSoft, uCloudSpeed, uCloudHeight, uTime;
+    uniform float uSunDisc, uSunSize, uSunHalo, uSunHaloPow;
+    varying vec3 vDir;
+    float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+    float vnoise(vec3 x){
+      vec3 i = floor(x), f = fract(x);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(hash(i+vec3(0,0,0)), hash(i+vec3(1,0,0)), f.x),
+                     mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+                 mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x),
+                     mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y), f.z);
+    }
+    float fbm(vec3 p){ float s = 0.0, a = 0.5; for(int i=0;i<5;i++){ s += a*vnoise(p); p *= 2.02; a *= 0.5; } return s; }
+    void main(){
+      vec3 dir = normalize(vDir);
+      float y = dir.y;
+      // 3-stop vertical gradient
+      vec3 grad = mix(uHorizon, uMid, smoothstep(0.0, uHorizonY, y));
+      grad = mix(grad, uTop, smoothstep(uHorizonY, uMidY, y));
+      // subtle noise to break gradient banding
+      if (uNoise > 0.0) grad += (fbm(dir * uNoiseScale) - 0.5) * uNoise;
+      vec3 col = grad;
+      // procedural clouds projected onto a sky plane
+      if (uClouds > 0.5 && y > 0.01) {
+        vec2 cp = dir.xz / max(0.06, y) * uCloudScale;
+        cp += vec2(uTime * 0.01 * uCloudSpeed, uTime * 0.006 * uCloudSpeed);
+        float d = fbm(vec3(cp, uCloudHeight * 4.0));
+        float cl = smoothstep(1.0 - uCloudCover, 1.0 - uCloudCover + uCloudSoft, d);
+        cl *= smoothstep(0.0, 0.18, y);                 // hide at the horizon line
+        float shade = 0.6 + 0.4 * fbm(vec3(cp * 2.3, uCloudHeight * 4.0 + 5.0));
+        col = mix(col, uCloudColor * shade, cl * uCloudDensity);
+      }
+      // sun disc + halo
+      if (uSunDisc > 0.5) {
+        float sd = dot(dir, normalize(uSunDir));
+        float ang = acos(clamp(sd, -1.0, 1.0));
+        float disc = 1.0 - smoothstep(uSunSize * 0.6, uSunSize, ang);
+        float halo = pow(max(sd, 0.0), uSunHaloPow) * uSunHalo;
+        col += uSunColor * (disc * 3.0 + halo);
+      }
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), skyMat);
+skyDome.renderOrder = -1;
+scene.add(skyDome);
+function updateSky() {
+  const u = skyMat.uniforms;
+  u.uTop.value.set(params.skyTop);
+  u.uMid.value.set(params.skyMid);
+  u.uHorizon.value.set(params.skyHorizon);
+  u.uHorizonY.value = params.skyHorizonY;
+  u.uMidY.value = Math.max(params.skyHorizonY + 0.02, params.skyMidY);
+  u.uNoise.value = params.skyNoise;
+  u.uNoiseScale.value = params.skyNoiseScale;
+  u.uClouds.value = params.clouds ? 1 : 0;
+  u.uCloudColor.value.set(params.cloudColor);
+  u.uCloudCover.value = params.cloudCoverage;
+  u.uCloudDensity.value = params.cloudDensity;
+  u.uCloudScale.value = params.cloudScale;
+  u.uCloudSoft.value = params.cloudSoftness;
+  u.uCloudSpeed.value = params.cloudSpeed;
+  u.uCloudHeight.value = params.cloudHeight;
+}
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 8000);
 camera.position.set(0, 95, 210);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 20, 0);
+
+// colour-grading / image-treatment pass
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uBrightness: { value: 1.0 }, uContrast: { value: 1.0 },
+    uSaturation: { value: 1.0 }, uVibrance: { value: 0.0 },
+    uTemperature: { value: 0.0 }, uTint: { value: 0.0 },
+    uHue: { value: 0.0 }, uGrain: { value: 0.0 }, uTime: { value: 0.0 },
+    uGain: { value: 1.0 },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uBrightness, uContrast, uSaturation, uVibrance, uTemperature, uTint, uHue, uGrain, uTime, uGain;
+    varying vec2 vUv;
+    vec3 hueShift(vec3 col, float h){
+      const vec3 k = vec3(0.57735);
+      float c = cos(h);
+      return col * c + cross(k, col) * sin(h) + k * dot(k, col) * (1.0 - c);
+    }
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      c *= uBrightness;
+      c.r *= 1.0 + uTemperature; c.b *= 1.0 - uTemperature;   // warm/cool
+      c.g *= 1.0 + uTint;                                     // green/magenta
+      if (abs(uHue) > 0.001) c = hueShift(c, uHue);
+      c = (c - 0.5) * uContrast + 0.5;                        // contrast
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, uSaturation);                      // saturation
+      if (abs(uVibrance) > 0.001) {                          // vibrance
+        float mx = max(c.r, max(c.g, c.b));
+        float sat = mx - min(c.r, min(c.g, c.b));
+        c = mix(vec3(l), c, 1.0 + uVibrance * (1.0 - sat));
+      }
+      c *= uGain;                                           // overall output brightness
+      if (uGrain > 0.0) {
+        float n = fract(sin(dot(vUv * (uTime + 1.0), vec2(12.9898, 78.233))) * 43758.5453);
+        c += (n - 0.5) * uGrain;
+      }
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`,
+};
+
+// post-processing — multisampled HDR target so antialiasing survives the passes
+const _sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+const composerTarget = new THREE.WebGLRenderTarget(_sz.x, _sz.y, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, composerTarget);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  params.bloomStrength, params.bloomRadius, params.bloomThreshold
+);
+composer.addPass(bloomPass);
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+const vignettePass = new ShaderPass(VignetteShader);
+vignettePass.uniforms.offset.value = 0.95;
+vignettePass.uniforms.darkness.value = params.vignette;
+composer.addPass(vignettePass);
+composer.addPass(new OutputPass());
+renderer.toneMappingExposure = params.exposure;
+
+function updateGrade() {
+  const u = gradePass.uniforms;
+  u.uBrightness.value = params.brightness;
+  u.uContrast.value = params.contrast;
+  u.uSaturation.value = params.saturation;
+  u.uVibrance.value = params.vibrance;
+  u.uTemperature.value = params.temperature;
+  u.uTint.value = params.tint;
+  u.uHue.value = params.hue;
+  u.uGrain.value = params.grain;
+  u.uGain.value = params.outputGain;
+}
+
+// apply renderer/bloom/vignette settings from params
+function updatePost() {
+  renderer.toneMappingExposure = params.exposure;
+  bloomPass.strength = params.bloomStrength;
+  bloomPass.radius = params.bloomRadius;
+  bloomPass.threshold = params.bloomThreshold;
+  vignettePass.uniforms.darkness.value = params.vignette;
+}
+
+// instant "looks" — each preset sets a grade recipe
+const LOOKS = {
+  none:        { brightness: 1.0, contrast: 1.0,  saturation: 1.0,  vibrance: 0.0, temperature: 0.0,  tint: 0.0,   hue: 0.0, grain: 0.0 },
+  cinematic:   { brightness: 1.0, contrast: 1.18, saturation: 0.95, vibrance: 0.2, temperature: 0.05, tint: -0.02, hue: 0.0, grain: 0.04 },
+  'warm dusk': { brightness: 1.05, contrast: 1.06, saturation: 1.2, vibrance: 0.15, temperature: 0.14, tint: 0.0, hue: 0.0, grain: 0.02 },
+  cold:        { brightness: 1.0, contrast: 1.08, saturation: 1.05, vibrance: 0.1, temperature: -0.12, tint: 0.03, hue: 0.0, grain: 0.0 },
+  vivid:       { brightness: 1.02, contrast: 1.12, saturation: 1.5, vibrance: 0.25, temperature: 0.0, tint: 0.0, hue: 0.0, grain: 0.0 },
+  matte:       { brightness: 1.06, contrast: 0.9, saturation: 0.85, vibrance: 0.0, temperature: 0.02, tint: 0.0, hue: 0.0, grain: 0.05 },
+};
+function applyLook() {
+  const p = LOOKS[params.look];
+  if (p) Object.assign(params, p);
+  updateGrade();
+  gui.controllersRecursive().forEach((c) => c.updateDisplay());
+}
+
+// tone mapping (only the ones present in this three build)
+const TONE_MAPS = {
+  None: THREE.NoToneMapping,
+  Linear: THREE.LinearToneMapping,
+  Reinhard: THREE.ReinhardToneMapping,
+  Cineon: THREE.CineonToneMapping,
+  ACESFilmic: THREE.ACESFilmicToneMapping,
+};
+if (THREE.AgXToneMapping !== undefined) TONE_MAPS.AgX = THREE.AgXToneMapping;
+if (THREE.NeutralToneMapping !== undefined) TONE_MAPS.Neutral = THREE.NeutralToneMapping;
+function applyToneMapping() {
+  renderer.toneMapping = TONE_MAPS[params.toneMapping] ?? THREE.ACESFilmicToneMapping;
+}
+
+function updateFog() {
+  scene.fog.color.set(params.fogColor);
+  scene.fog.near = params.fogNear;
+  scene.fog.far = params.fogFar;
+  updateShaderUniforms();
+}
 
 // lights
 const hemi = new THREE.HemisphereLight(0x8fb4ff, 0x331a2a, 0.9);
@@ -216,6 +551,46 @@ scene.add(sun);
 const rim = new THREE.DirectionalLight(0x6db0ff, 0.8);
 rim.position.set(90, 40, -120);
 scene.add(rim);
+
+// sun direction from azimuth/elevation (unit vector pointing toward the sun)
+function sunDir() {
+  const az = THREE.MathUtils.degToRad(params.sunAzimuth);
+  const el = THREE.MathUtils.degToRad(params.sunElevation);
+  return new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+}
+
+// push sun settings into the directional light + terrain & sky shaders
+function updateSun() {
+  const d = sunDir();
+  sun.visible = params.sunEnable;
+  sun.color.set(params.sunColor);
+  sun.intensity = params.sunEnable ? params.sunIntensity * 2.2 : 0;
+  sun.position.copy(d).multiplyScalar(400);
+
+  const su = skyMat.uniforms;
+  su.uSunDisc.value = (params.sunEnable && params.sunDiscVisible) ? 1 : 0;
+  su.uSunDir.value.copy(d);
+  su.uSunColor.value.set(params.sunColor);
+  su.uSunSize.value = params.sunSize;
+  su.uSunHalo.value = params.sunHalo;
+  su.uSunHaloPow.value = params.sunHaloPow;
+
+  if (terrain && terrain.material.isShaderMaterial) {
+    const u = terrain.material.uniforms;
+    u.uSunEnable.value = params.sunEnable ? 1 : 0;
+    u.uSunDir.value.copy(d);
+    u.uSunColor.value.set(params.sunColor);
+    u.uSunIntensity.value = params.sunIntensity;
+    u.uAmbient.value = params.sunAmbient;
+    u.uShadowEnable.value = params.shadowEnable ? 1 : 0;
+    u.uShadowHard.value = params.shadowHard ? 1 : 0;
+    u.uShadowStrength.value = params.shadowStrength;
+    u.uShadowDist.value = params.shadowDist;
+    u.uShadowSoft.value = params.shadowSoft;
+    u.uShadowBias.value = params.shadowBias;
+    if (params.sunDriveDuotone) u.uLightDir.value.set(d.x, 0, d.z);
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Color ramp (duotone-ish, echoing the reference)                    */
@@ -269,12 +644,26 @@ function altitudeProfile(u, L) {
   return A * Math.sin(2 * Math.PI * N * u + params.windPhase);
 }
 
+// easing for the base level ramp (0..1 in -> 0..1 out)
+function levelEase(u) {
+  const p = params.levelCurvePower;
+  switch (params.levelCurve) {
+    case 'ease-in': return Math.pow(u, p);
+    case 'ease-out': return 1 - Math.pow(1 - u, p);
+    case 'ease-in-out': return u < 0.5 ? 0.5 * Math.pow(2 * u, p) : 1 - 0.5 * Math.pow(2 * (1 - u), p);
+    case 'smoothstep': return u * u * (3 - 2 * u);
+    case 'exponential': { const k = p * 2; return (Math.exp(k * u) - 1) / (Math.exp(k) - 1); }
+    default: return u; // linear
+  }
+}
+
 // floor height at a given z: net climb toward the back + rolling up/down
 function floorYAt(z) {
   const L = params.length;
   const u = (z + L / 2) / L;
   return params.floorHeight
     + params.pathSlope * smoothstep(0, 1, u)
+    + (params.levelStart + (params.levelEnd - params.levelStart) * levelEase(u)) // base level ramp
     + altitudeProfile(u, L);
 }
 
@@ -311,16 +700,335 @@ function sample(x, z) {
   let valley = smoothstep(half, half + params.wallWidth, dist); // 0 on path, 1 far
   valley = Math.pow(valley, params.wallCurve);
   const floorY = floorYAt(z);
-  const mountain = fbm(x, z) * params.mountainHeight;
+  const gu = Math.min(1, Math.max(0, (z + params.length / 2) / params.length)); // 0 front .. 1 back
+  const growth = params.growthFront + (params.growthBack - params.growthFront) * Math.pow(gu, params.growthCurve);
+  const mountain = fbm(x, z) * params.mountainHeight * growth;
   // taper mountains down at the outer x edges so the slab edges aren't a cliff wall
   const edge = 1 - smoothstep(params.width * 0.5 - 6, params.width * 0.5, Math.abs(x));
   const groundNoise = (noise.noise2D(x * 0.08, z * 0.08)) * params.floorNoise;
   const y = floorY + groundNoise * (1 - valley) + mountain * valley * (0.25 + 0.75 * edge + 0.0);
-  return { y, valley };
+  // local height: 0 at the valley floor -> 1 at a full peak, regardless of world Y
+  const denom = params.mountainHeight * Math.max(0.0001, growth);
+  const relHeight = Math.min(1, Math.max(0, (y - floorY) / denom));
+  return { y, valley, relHeight };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Surface materials                                                  */
+/* ------------------------------------------------------------------ */
+const standardMaterial = () => new THREE.MeshStandardMaterial({
+  vertexColors: true, roughness: 0.92, metalness: 0.0,
+  wireframe: params.wireframe, flatShading: false,
+});
+
+const LINE_BLENDS = { add: 0, multiply: 1, screen: 2, overlay: 3, normal: 4 };
+const DUO_MODES = { facing: 0, noise: 1, height: 2 };
+const NOISE_TYPES = { fbm: 0, ridged: 1, billow: 2, cellular: 3 };
+
+const TERRAIN_VERT = /* glsl */`
+  attribute float aValley;
+  attribute float aRelHeight;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  varying float vValley;
+  varying float vY;
+  varying float vRel;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    vValley = aValley;
+    vRel = aRelHeight;
+    vY = position.y;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+const TERRAIN_FRAG = /* glsl */`
+  precision highp float;
+  uniform vec3 uWarm, uCool, uPath, uLineColor, uHaze, uRimColor;
+  uniform float uLineFreq, uLineWidth, uLineIntensity;
+  uniform int uLineBlend;
+  uniform float uMinY, uMaxY, uFogNear, uFogFar;
+  uniform float uBlendLo, uBlendHi, uBalance, uRimPower, uRimIntensity;
+  uniform float uWindAmp, uWindFreq, uWindPhase, uLen;
+  uniform float uTrailWidth, uTrailSpill, uTrailGlow, uTrailSpacing, uTrailLineWidth, uTrailClear;
+  uniform vec3 uLightDir;
+  uniform float uSunEnable, uSunIntensity, uAmbient;
+  uniform vec3 uSunDir, uSunColor;
+  uniform sampler2D uHeightMap;
+  uniform float uShadowEnable, uShadowStrength, uShadowDist, uShadowSoft, uShadowBias, uWidth, uShadowHard;
+  #define SHADOW_STEPS 48
+  // heightfield self-shadow: march toward the sun, sampling the baked heights
+  float shadowFactor(vec3 wp, vec3 sdir) {
+    if (sdir.y <= 0.02) return 1.0;
+    float stepLen = uShadowDist / float(SHADOW_STEPS);
+    float t = uShadowBias;
+    float res = 1.0;
+    for (int i = 0; i < SHADOW_STEPS; i++) {
+      t += stepLen;
+      vec3 p = wp + sdir * t;
+      vec2 uv = vec2((p.x + uWidth * 0.5) / uWidth, (p.z + uLen * 0.5) / uLen);
+      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+      float h = texture2D(uHeightMap, uv).r;
+      float clear = p.y - h;                       // >0 lit, <0 below terrain
+      if (uShadowHard > 0.5) {
+        if (clear < 0.0) { res = 0.0; break; }     // hard: crisp binary occlusion
+      } else {
+        res = min(res, clear / (max(0.001, uShadowSoft) * t)); // soft penumbra
+        if (res < -0.5) { res = -1.0; break; }
+      }
+    }
+    res = clamp(res, 0.0, 1.0);
+    return 1.0 - (1.0 - res) * uShadowStrength;
+  }
+  uniform int uDuoMode, uDuoNoiseType;
+  uniform float uDuoNoiseScale, uDuoNoiseWarp, uDuoHeight;
+  uniform float uTime, uFlowFog, uFlowIntensity, uFlowDensity, uFlowScale, uFlowSpeed, uFlowReach;
+  uniform vec3 uFlowColor;
+  float h31(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float vnoise(vec3 x){
+    vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h31(i+vec3(0,0,0)), h31(i+vec3(1,0,0)), f.x),
+                   mix(h31(i+vec3(0,1,0)), h31(i+vec3(1,1,0)), f.x), f.y),
+               mix(mix(h31(i+vec3(0,0,1)), h31(i+vec3(1,0,1)), f.x),
+                   mix(h31(i+vec3(0,1,1)), h31(i+vec3(1,1,1)), f.x), f.y), f.z);
+  }
+  float fbm3(vec3 p){ float s=0.0,a=0.5; for(int i=0;i<5;i++){ s+=a*vnoise(p); p*=2.02; a*=0.5; } return s; }
+  float ridged3(vec3 p){ float s=0.0,a=0.5; for(int i=0;i<5;i++){ float n=1.0-abs(vnoise(p)*2.0-1.0); s+=a*n*n; p*=2.02; a*=0.5; } return s; }
+  float billow3(vec3 p){ float s=0.0,a=0.5; for(int i=0;i<5;i++){ float n=abs(vnoise(p)*2.0-1.0); s+=a*n; p*=2.02; a*=0.5; } return s; }
+  float worley3(vec3 p){
+    vec3 ip=floor(p), fp=fract(p); float d=1.0;
+    for(int z=-1;z<=1;z++) for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++){
+      vec3 g=vec3(float(x),float(y),float(z));
+      vec3 o=vec3(h31(ip+g), h31(ip+g+31.0), h31(ip+g+71.0));
+      vec3 r=g+o-fp; d=min(d, dot(r,r));
+    }
+    return clamp(sqrt(d), 0.0, 1.0);
+  }
+  float duoNoise(vec3 p){
+    if(uDuoNoiseWarp > 0.0){ vec3 w=vec3(fbm3(p+1.3), fbm3(p+5.2), fbm3(p+9.7)); p += (w-0.5)*uDuoNoiseWarp; }
+    if(uDuoNoiseType==1) return ridged3(p);
+    if(uDuoNoiseType==2) return billow3(p);
+    if(uDuoNoiseType==3) return worley3(p);
+    return fbm3(p);
+  }
+  #define TAU 6.2831853
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  varying float vValley;
+  varying float vY;
+  varying float vRel;
+  uniform float uDuoHeightLocal;
+  void main() {
+    vec3 N = normalize(vWorldNormal);
+    float elev = clamp((vY - uMinY) / max(0.001, (uMaxY - uMinY)), 0.0, 1.0);
+    float hsrc = (uDuoHeightLocal > 0.5) ? vRel : elev; // local-per-dune vs world height
+
+    // duotone: warm where the dune face turns toward the light azimuth, cool away.
+    // a soft, wide blend band lets red and blue merge through purple like the ref.
+    float src;
+    if (uDuoMode == 2) {
+      src = hsrc;                                          // by height (local or world)
+    } else if (uDuoMode == 1) {
+      src = duoNoise(vWorldPos * uDuoNoiseScale);          // by noise
+    } else {
+      vec3 nH = normalize(vec3(N.x, 0.0, N.z) + 1e-4);     // by face direction
+      src = dot(nH, normalize(uLightDir)) * 0.5 + 0.5;
+    }
+    src = mix(src, hsrc, uDuoHeight);                      // optional height influence
+    float flat_ = smoothstep(0.55, 1.0, N.y);
+    float ft = clamp(src + (flat_ - 0.5) * 0.10 + uBalance, 0.0, 1.0);
+    float t = smoothstep(uBlendLo, uBlendHi, ft);
+    vec3 base = mix(uCool, uWarm, t);
+    base *= mix(0.5, 1.18, elev); // lower areas darker, crests brighter
+
+    // directional sun shading on the dune material (before emissive elements)
+    if (uSunEnable > 0.5) {
+      float sh = (uShadowEnable > 0.5) ? shadowFactor(vWorldPos, normalize(uSunDir)) : 1.0;
+      float ndl = max(dot(N, uSunDir), 0.0) * sh;
+      base = base * (uAmbient + (1.0 - uAmbient) * ndl * uSunIntensity)
+             + uSunColor * (ndl * ndl) * uSunIntensity * 0.18;
+    }
+
+    // trail geometry along the winding centreline (computed first so the
+    // topographic striations can be masked out wherever the trail sits)
+    float u = (vWorldPos.z + uLen * 0.5) / uLen;
+    float cx = uWindAmp * sin(u * TAU * uWindFreq + uWindPhase);
+    float sx = vWorldPos.x - cx;      // signed lateral distance from the centreline
+    float pd = abs(sx);
+    float env = exp(-pd / max(0.05, uTrailSpill));       // bundle concentration
+    // clear-zone mask uses a wider falloff so striations stop a bit beyond the glow
+    float maskEnv = exp(-pd / max(0.05, uTrailSpill * uTrailClear));
+    float trailMask = clamp(maskEnv * 1.5, 0.0, 1.0);    // 1 over the trail, 0 away
+
+    // topographic striations following the relief — faded out over the trail
+    // so the elevation lines never cross the glowing path
+    float bands = abs(fract(elev * uLineFreq) - 0.5) * 2.0;
+    float line = smoothstep(uLineWidth, 0.0, bands);
+    float la = line * uLineIntensity * (1.0 - trailMask);
+    if (uLineBlend == 0) base += uLineColor * la;                                     // add
+    else if (uLineBlend == 1) base = mix(base, base * uLineColor, la);               // multiply
+    else if (uLineBlend == 2) base = mix(base, 1.0 - (1.0 - base) * (1.0 - uLineColor), la); // screen
+    else if (uLineBlend == 3) {                                                       // overlay
+      vec3 ov = mix(2.0 * base * uLineColor, 1.0 - 2.0 * (1.0 - base) * (1.0 - uLineColor), step(0.5, base));
+      base = mix(base, ov, la);
+    } else base = mix(base, uLineColor, la);                                          // normal
+
+    // fresnel rim light on grazing edges (bright dune silhouettes)
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), uRimPower);
+    base += uRimColor * fres * uRimIntensity;
+
+    // glowing trail: a bundle of parallel light lines, densest at the centre
+    float lp = abs(fract(sx / max(0.2, uTrailSpacing) + 0.5) - 0.5) * 2.0;
+    float lines = smoothstep(uTrailLineWidth, 0.0, lp) * env;
+    float core = smoothstep(uTrailWidth, 0.0, pd);       // bright central streak
+    float up = clamp(N.y, 0.0, 1.0);
+    base += uPath * (lines * 1.6 + core * 1.4) * uTrailGlow * (0.45 + 0.55 * up);
+
+    // animated flow fog: luminous wisps drifting along the path
+    if (uFlowFog > 0.5) {
+      float lat = sx;                                            // lateral from the path centre
+      float w = fbm3(vec3(lat * uFlowDensity, vWorldPos.z * uFlowScale - uTime * uFlowSpeed, 4.0));
+      float wisp = smoothstep(0.42, 0.82, w);                   // soft wispy mask
+      float reach = exp(-abs(lat) / max(1.0, uFlowReach));      // concentrate near the trail
+      base += uFlowColor * wisp * reach * uFlowIntensity;
+    }
+
+    // distance haze toward the horizon
+    float d = length(vWorldPos - cameraPosition);
+    float f = clamp((d - uFogNear) / max(1.0, (uFogFar - uFogNear)), 0.0, 1.0);
+    base = mix(base, uHaze, f * 0.9);
+
+    gl_FragColor = vec4(base, 1.0);
+  }
+`;
+
+function shaderUniforms(geo) {
+  const bb = geo.boundingBox;
+  const az = params.shLightAz;
+  return {
+    uWarm: { value: new THREE.Color(params.shWarm) },
+    uCool: { value: new THREE.Color(params.shCool) },
+    uPath: { value: new THREE.Color(params.shPath) },
+    uLineColor: { value: new THREE.Color(params.shLineColor) },
+    uHaze: { value: new THREE.Color(params.fogColor) },
+    uRimColor: { value: new THREE.Color(params.shRimColor) },
+    uLineFreq: { value: params.shLineFreq },
+    uLineWidth: { value: params.shLineWidth },
+    uLineIntensity: { value: params.shLineIntensity },
+    uLineBlend: { value: LINE_BLENDS[params.shLineBlend] ?? 0 },
+    uBlendLo: { value: 0.5 - params.shBlend },
+    uBlendHi: { value: 0.5 + params.shBlend },
+    uBalance: { value: params.shBalance },
+    uDuoMode: { value: DUO_MODES[params.duotoneMode] ?? 0 },
+    uDuoNoiseType: { value: NOISE_TYPES[params.duoNoiseType] ?? 0 },
+    uDuoNoiseScale: { value: params.duoNoiseScale },
+    uDuoNoiseWarp: { value: params.duoNoiseWarp },
+    uDuoHeight: { value: params.duoHeight },
+    uDuoHeightLocal: { value: params.duoHeightLocal ? 1 : 0 },
+    uTime: { value: 0 },
+    uFlowFog: { value: params.flowFog ? 1 : 0 },
+    uFlowColor: { value: new THREE.Color(params.flowColor) },
+    uFlowIntensity: { value: params.flowIntensity },
+    uFlowDensity: { value: params.flowDensity },
+    uFlowScale: { value: params.flowScale },
+    uFlowSpeed: { value: params.flowSpeed },
+    uFlowReach: { value: params.flowReach },
+    uRimPower: { value: params.shRimPower },
+    uRimIntensity: { value: params.shRimIntensity },
+    uWindAmp: { value: params.windAmplitude },
+    uWindFreq: { value: params.windFrequency },
+    uWindPhase: { value: params.windPhase },
+    uLen: { value: params.length },
+    uTrailWidth: { value: params.trailWidth },
+    uTrailSpill: { value: params.trailSpill },
+    uTrailGlow: { value: params.trailGlow },
+    uTrailSpacing: { value: params.trailSpacing },
+    uTrailLineWidth: { value: params.trailLineWidth },
+    uTrailClear: { value: params.trailClear },
+    uLightDir: { value: new THREE.Vector3(Math.sin(az), 0, Math.cos(az)) },
+    uMinY: { value: bb ? bb.min.y : 0 },
+    uMaxY: { value: bb ? bb.max.y : 1 },
+    uFogNear: { value: params.fogNear },
+    uFogFar: { value: params.fogFar },
+    uSunEnable: { value: params.sunEnable ? 1 : 0 },
+    uSunDir: { value: sunDir() },
+    uSunColor: { value: new THREE.Color(params.sunColor) },
+    uSunIntensity: { value: params.sunIntensity },
+    uAmbient: { value: params.sunAmbient },
+    uHeightMap: { value: null },
+    uWidth: { value: params.width },
+    uShadowEnable: { value: params.shadowEnable ? 1 : 0 },
+    uShadowHard: { value: params.shadowHard ? 1 : 0 },
+    uShadowStrength: { value: params.shadowStrength },
+    uShadowDist: { value: params.shadowDist },
+    uShadowSoft: { value: params.shadowSoft },
+    uShadowBias: { value: params.shadowBias },
+  };
+}
+
+function makeTerrainMaterial(geo) {
+  if (params.surfaceStyle !== 'duotone') return standardMaterial();
+  return new THREE.ShaderMaterial({
+    uniforms: shaderUniforms(geo),
+    vertexShader: TERRAIN_VERT,
+    fragmentShader: TERRAIN_FRAG,
+    wireframe: params.wireframe,
+  });
+}
+
+// live-update shader uniforms without a full rebuild
+function updateShaderUniforms() {
+  if (!terrain || !terrain.material.isShaderMaterial) return;
+  const u = terrain.material.uniforms;
+  const az = params.shLightAz;
+  u.uWarm.value.set(params.shWarm);
+  u.uCool.value.set(params.shCool);
+  u.uPath.value.set(params.shPath);
+  u.uLineColor.value.set(params.shLineColor);
+  u.uHaze.value.set(params.fogColor);
+  u.uRimColor.value.set(params.shRimColor);
+  u.uLineFreq.value = params.shLineFreq;
+  u.uLineWidth.value = params.shLineWidth;
+  u.uLineIntensity.value = params.shLineIntensity;
+  u.uLineBlend.value = LINE_BLENDS[params.shLineBlend] ?? 0;
+  u.uFogNear.value = params.fogNear;
+  u.uFogFar.value = params.fogFar;
+  u.uBlendLo.value = 0.5 - params.shBlend;
+  u.uBlendHi.value = 0.5 + params.shBlend;
+  u.uBalance.value = params.shBalance;
+  u.uDuoMode.value = DUO_MODES[params.duotoneMode] ?? 0;
+  u.uDuoNoiseType.value = NOISE_TYPES[params.duoNoiseType] ?? 0;
+  u.uDuoNoiseScale.value = params.duoNoiseScale;
+  u.uDuoNoiseWarp.value = params.duoNoiseWarp;
+  u.uDuoHeight.value = params.duoHeight;
+  u.uDuoHeightLocal.value = params.duoHeightLocal ? 1 : 0;
+  u.uFlowFog.value = params.flowFog ? 1 : 0;
+  u.uFlowColor.value.set(params.flowColor);
+  u.uFlowIntensity.value = params.flowIntensity;
+  u.uFlowDensity.value = params.flowDensity;
+  u.uFlowScale.value = params.flowScale;
+  u.uFlowSpeed.value = params.flowSpeed;
+  u.uFlowReach.value = params.flowReach;
+  u.uRimPower.value = params.shRimPower;
+  u.uRimIntensity.value = params.shRimIntensity;
+  u.uWindAmp.value = params.windAmplitude;
+  u.uWindFreq.value = params.windFrequency;
+  u.uWindPhase.value = params.windPhase;
+  u.uLen.value = params.length;
+  u.uTrailWidth.value = params.trailWidth;
+  u.uTrailSpill.value = params.trailSpill;
+  u.uTrailGlow.value = params.trailGlow;
+  u.uTrailSpacing.value = params.trailSpacing;
+  u.uTrailLineWidth.value = params.trailLineWidth;
+  u.uTrailClear.value = params.trailClear;
+  u.uLightDir.value.set(Math.sin(az), 0, Math.cos(az));
 }
 
 let terrain = null;
 let pathLine = null;
+let heightTex = null;
 let flowGroup = null;
 let flowCurve = null;     // CatmullRom along the centerline, for the camera/runner
 let curveLen = 1;
@@ -343,14 +1051,17 @@ function buildTerrain() {
   const positions = new Float32Array(nx * nz * 3);
   const colors = new Float32Array(nx * nz * 3);
   const uvs = new Float32Array(nx * nz * 2); // planar UVs over the footprint
+  const valleys = new Float32Array(nx * nz);  // 0 on path .. 1 far (for the shader)
+  const heights = new Float32Array(nx * nz);  // world Y per vertex (shadow heightmap)
+  const rels = new Float32Array(nx * nz);     // local relative height (0 floor .. 1 peak)
 
   const col = new THREE.Color();
-  let k = 0, t = 0;
+  let k = 0, t = 0, vi = 0;
   for (let j = 0; j < nz; j++) {
     const z = -length / 2 + (j / segmentsZ) * length;
     for (let i = 0; i < nx; i++) {
       const x = -width / 2 + (i / segmentsX) * width;
-      const { y, valley } = sample(x, z);
+      const { y, valley, relHeight } = sample(x, z);
       positions[k] = x; positions[k + 1] = y; positions[k + 2] = z;
 
       // color: blend a glowing floor color near the path into the height ramp
@@ -360,6 +1071,7 @@ function buildTerrain() {
       col.lerp(floorColor, onPath * 0.85);
       colors[k] = col.r; colors[k + 1] = col.g; colors[k + 2] = col.b;
       uvs[t] = i / segmentsX; uvs[t + 1] = j / segmentsZ;
+      valleys[vi] = valley; heights[vi] = y; rels[vi] = relHeight; vi++;
       k += 3; t += 2;
     }
   }
@@ -382,22 +1094,31 @@ function buildTerrain() {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setAttribute('aValley', new THREE.BufferAttribute(valleys, 1));
+  geo.setAttribute('aRelHeight', new THREE.BufferAttribute(rels, 1));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   geo.computeVertexNormals();
   geo.computeBoundingBox();
 
-  const mat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.92,
-    metalness: 0.0,
-    wireframe: params.wireframe,
-    flatShading: false,
-  });
+  const mat = makeTerrainMaterial(geo);
+
+  // bake the height field to a texture for in-shader self-shadowing
+  if (heightTex) heightTex.dispose();
+  heightTex = new THREE.DataTexture(heights, nx, nz, THREE.RedFormat, THREE.FloatType);
+  heightTex.magFilter = THREE.NearestFilter;
+  heightTex.minFilter = THREE.NearestFilter;
+  heightTex.needsUpdate = true;
+  if (mat.isShaderMaterial) {
+    mat.uniforms.uHeightMap.value = heightTex;
+    mat.uniforms.uWidth.value = width;
+    mat.uniforms.uLen.value = length;
+  }
 
   if (terrain) { terrain.geometry.dispose(); terrain.material.dispose(); scene.remove(terrain); }
   terrain = new THREE.Mesh(geo, mat);
   terrain.name = 'Terrain';
   scene.add(terrain);
+  if (typeof updateSun === 'function') updateSun();
 
   buildPathLine();
   buildFlowLines();
@@ -433,19 +1154,53 @@ function buildPathLine() {
   scene.add(pathLine);
 }
 
-// Glowing contour lines that run the length of the terrain, parallel to the
-// path so they drape over the hills and follow the trail — like the reference.
+function lineMaterial() {
+  return new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: params.lineOpacity,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+}
+
+// add a polyline (array of {x,y,z}) with a single colour to the flow group
+function addPolyline(group, pts, color, name) {
+  const n = pts.length;
+  if (n < 2) return;
+  const pos = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = pts[i].x; pos[i * 3 + 1] = pts[i].y; pos[i * 3 + 2] = pts[i].z;
+    col[i * 3] = color.r; col[i * 3 + 1] = color.g; col[i * 3 + 2] = color.b;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const line = new THREE.Line(g, lineMaterial());
+  if (name) line.name = name;
+  group.add(line);
+}
+
+// Dispatcher: build either path-parallel flow lines or topographic contours.
 function buildFlowLines() {
   if (flowGroup) {
     flowGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     scene.remove(flowGroup);
     flowGroup = null;
   }
-  if (!params.flowLines || params.lineCount < 2) return;
+  if (!params.flowLines) return;
 
   flowGroup = new THREE.Group();
   flowGroup.name = 'FlowLines';
+  if (params.lineMode === 'contour') buildContourLines(flowGroup);
+  else buildPathLines(flowGroup);
+  scene.add(flowGroup);
+}
 
+// MODE 1 — lines parallel to the path, draped over the hills (the original).
+function buildPathLines(group) {
+  if (params.lineCount < 2) return;
   const warm = new THREE.Color(params.lineWarm);
   const cool = new THREE.Color(params.lineCool);
   const halfW = params.width / 2;
@@ -453,10 +1208,9 @@ function buildFlowLines() {
   const c = new THREE.Color();
 
   for (let li = 0; li < params.lineCount; li++) {
-    // lateral offset from the path centerline, evenly spread across the width
     const f = params.lineCount === 1 ? 0 : (li / (params.lineCount - 1)) * 2 - 1; // -1..1
     const s = f * halfW;
-    const lateral = Math.abs(f); // 0 at path, 1 at edges
+    const lateral = Math.abs(f);
 
     const pos = new Float32Array((nz + 1) * 3);
     const col = new Float32Array((nz + 1) * 3);
@@ -467,28 +1221,151 @@ function buildFlowLines() {
       const x = THREE.MathUtils.clamp(cx + s, -halfW, halfW);
       const r = sample(x, z);
       pos[k] = x; pos[k + 1] = r.y + params.lineLift; pos[k + 2] = z;
-
-      // warm & bright near the path, cooler/dimmer toward the edges
       c.copy(warm).lerp(cool, lateral);
       const bright = (1 - r.valley) * 0.9 + (1 - lateral) * 0.3 + 0.15;
       c.multiplyScalar(Math.min(1.6, bright));
       col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
       k += 3;
     }
-
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const m = new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: params.lineOpacity,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    flowGroup.add(new THREE.Line(g, m));
+    group.add(new THREE.Line(g, lineMaterial()));
   }
-  scene.add(flowGroup);
+}
+
+// MODE 2 — topographic contour lines (iso-elevation) via marching squares.
+function buildContourLines(group) {
+  const W = params.width, L = params.length;
+  const halfW = W / 2, halfL = L / 2;
+  const gx = Math.max(8, Math.round(params.contourGridX));   // cells across width
+  const cell = W / gx;
+  const gz = Math.max(8, Math.round(L / cell));              // cells along length
+  const nx = gx + 1, nz = gz + 1;
+
+  // sample the height field once
+  const H = new Float32Array(nx * nz);
+  const xs = new Float32Array(nx), zs = new Float32Array(nz);
+  for (let i = 0; i < nx; i++) xs[i] = -halfW + (i / gx) * W;
+  for (let j = 0; j < nz; j++) zs[j] = -halfL + (j / gz) * L;
+  let hMin = Infinity, hMax = -Infinity;
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const y = sample(xs[i], zs[j]).y;
+      H[j * nx + i] = y;
+      if (y < hMin) hMin = y;
+      if (y > hMax) hMax = y;
+    }
+  }
+  if (hMax - hMin < 1e-4) return;
+
+  const warm = new THREE.Color(params.lineWarm);
+  const cool = new THREE.Color(params.lineCool);
+  const N = Math.max(1, Math.round(params.contourLevels));
+
+  for (let l = 0; l < N; l++) {
+    const t = (l + 1) / (N + 1);
+    const level = hMin + (hMax - hMin) * t;
+
+    // collect marching-squares segments for this level
+    const segs = [];
+    for (let j = 0; j < gz; j++) {
+      for (let i = 0; i < gx; i++) {
+        const a = H[j * nx + i];           // bottom-left
+        const b = H[j * nx + i + 1];        // bottom-right
+        const cc = H[(j + 1) * nx + i + 1]; // top-right
+        const d = H[(j + 1) * nx + i];      // top-left
+        let idx = 0;
+        if (a > level) idx |= 1;
+        if (b > level) idx |= 2;
+        if (cc > level) idx |= 4;
+        if (d > level) idx |= 8;
+        if (idx === 0 || idx === 15) continue;
+
+        const x0 = xs[i], x1 = xs[i + 1], z0 = zs[j], z1 = zs[j + 1];
+        const lerp = (va, vb) => (level - va) / (vb - va);
+        const eB = () => ({ x: x0 + (x1 - x0) * lerp(a, b), z: z0 });          // bottom
+        const eR = () => ({ x: x1, z: z0 + (z1 - z0) * lerp(b, cc) });         // right
+        const eT = () => ({ x: x0 + (x1 - x0) * lerp(d, cc), z: z1 });         // top
+        const eL = () => ({ x: x0, z: z0 + (z1 - z0) * lerp(a, d) });          // left
+        const push = (p, q) => segs.push([p.x, p.z, q.x, q.z]);
+
+        switch (idx) {
+          case 1: case 14: push(eL(), eB()); break;
+          case 2: case 13: push(eB(), eR()); break;
+          case 3: case 12: push(eL(), eR()); break;
+          case 4: case 11: push(eR(), eT()); break;
+          case 6: case 9:  push(eB(), eT()); break;
+          case 7: case 8:  push(eL(), eT()); break;
+          case 5:  push(eL(), eT()); push(eB(), eR()); break; // saddle
+          case 10: push(eL(), eB()); push(eR(), eT()); break; // saddle
+        }
+      }
+    }
+    if (!segs.length) continue;
+
+    // colour by elevation: warm (low/valley) -> cool (high)
+    const c = warm.clone().lerp(cool, t);
+    c.multiplyScalar(1.1);
+    const y = level + params.lineLift;
+
+    // stitch segments into connected polylines so they export cleanly
+    const polylines = stitchSegments(segs);
+    for (const pl of polylines) {
+      const pts = pl.map(p => ({ x: p[0], y, z: p[1] }));
+      addPolyline(group, pts, c, 'Contour_' + String(l).padStart(2, '0'));
+    }
+  }
+}
+
+// Link marching-squares segments sharing endpoints into polylines.
+function stitchSegments(segs) {
+  const key = (x, z) => x.toFixed(3) + ',' + z.toFixed(3);
+  const ends = new Map(); // endpoint key -> list of {seg, end}
+  const used = new Array(segs.length).fill(false);
+  const add = (k, seg, end) => { (ends.get(k) || ends.set(k, []).get(k)).push({ seg, end }); };
+  for (let s = 0; s < segs.length; s++) {
+    add(key(segs[s][0], segs[s][1]), s, 0);
+    add(key(segs[s][2], segs[s][3]), s, 1);
+  }
+  const ptAt = (s, end) => end === 0 ? [segs[s][0], segs[s][1]] : [segs[s][2], segs[s][3]];
+  const nextFrom = (k, skip) => {
+    const list = ends.get(k);
+    if (!list) return -1;
+    for (const e of list) if (e.seg !== skip && !used[e.seg]) return e.seg;
+    return -1;
+  };
+
+  const polylines = [];
+  for (let s = 0; s < segs.length; s++) {
+    if (used[s]) continue;
+    used[s] = true;
+    let line = [ptAt(s, 0), ptAt(s, 1)];
+    // extend forward from the tail
+    let cur = s, tail = ptAt(s, 1);
+    while (true) {
+      const nx = nextFrom(key(tail[0], tail[1]), cur);
+      if (nx < 0) break;
+      used[nx] = true;
+      const a = ptAt(nx, 0), b = ptAt(nx, 1);
+      tail = (key(a[0], a[1]) === key(tail[0], tail[1])) ? b : a;
+      line.push(tail);
+      cur = nx;
+    }
+    // extend backward from the head
+    cur = s; let head = ptAt(s, 0);
+    while (true) {
+      const nx = nextFrom(key(head[0], head[1]), cur);
+      if (nx < 0) break;
+      used[nx] = true;
+      const a = ptAt(nx, 0), b = ptAt(nx, 1);
+      head = (key(a[0], a[1]) === key(head[0], head[1])) ? b : a;
+      line.unshift(head);
+      cur = nx;
+    }
+    polylines.push(line);
+  }
+  return polylines;
 }
 
 function updateLineOpacity() {
@@ -511,7 +1388,7 @@ function exportGLB() {
   if (!terrain) return;
   setStatus('exporting GLB…');
   const group = new THREE.Group();
-  const mesh = new THREE.Mesh(terrain.geometry, terrain.material.clone());
+  const mesh = new THREE.Mesh(terrain.geometry, standardMaterial());
   mesh.name = 'Terrain';
   group.add(mesh);
   if (params.showPath && pathLine) group.add(pathLine.clone());
@@ -710,8 +1587,17 @@ settingsInput.addEventListener('change', (e) => {
       let n = 0;
       for (const k in loaded) { if (k in params) { params[k] = loaded[k]; n++; } }
       gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      // re-apply everything (terrain + every shader / post system)
       noise = new SimplexNoise(params.seed);
       buildTerrain();
+      applyToneMapping();
+      updatePost();
+      updateGrade();
+      updateFog();
+      updateSky();
+      updateSun();
+      updateLens();
+      updateFrame();
       controls.enabled = !params.flyMode;
       runT = 0;
       setStatus(`loaded ${file.name} — applied ${n} settings`);
@@ -738,6 +1624,31 @@ function exportPathJSON() {
 function regen() { noise = new SimplexNoise(params.seed); buildTerrain(); }
 const maybe = () => { if (params.autoUpdate) buildTerrain(); };
 
+// camera lens: focal length (mm, full-frame) -> vertical FOV
+function updateLens() {
+  camera.fov = 2 * Math.atan(12 / params.focalLength) * 180 / Math.PI; // 24mm sensor height
+  camera.updateProjectionMatrix();
+}
+
+// aspect-ratio frame overlay (letterbox/pillarbox bars)
+const FRAME_RATIOS = { off: 0, '16:9': 16 / 9, '9:16': 9 / 16, '2.39:1': 2.39, '2:1': 2, '1:1': 1, '4:5': 0.8, '3:2': 1.5, '4:3': 4 / 3 };
+const mkBar = (extra) => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;background:#000;pointer-events:none;z-index:6;display:none;' + extra; document.body.appendChild(d); return d; };
+const frameTop = mkBar('top:0;left:0;width:100%;');
+const frameBottom = mkBar('bottom:0;left:0;width:100%;');
+const frameLeft = mkBar('top:0;left:0;height:100%;');
+const frameRight = mkBar('top:0;right:0;height:100%;');
+const frameBars = [frameTop, frameBottom, frameLeft, frameRight];
+function updateFrame() {
+  const r = FRAME_RATIOS[params.frameRatio] || 0;
+  if (!r) { frameBars.forEach(b => (b.style.display = 'none')); return; }
+  const W = innerWidth, H = innerHeight;
+  let top = 0, side = 0;
+  if (r > W / H) top = (H - W / r) / 2; else side = (W - H * r) / 2;
+  frameBars.forEach(b => { b.style.display = 'block'; b.style.opacity = params.frameOpacity; });
+  frameTop.style.height = top + 'px'; frameBottom.style.height = top + 'px';
+  frameLeft.style.width = side + 'px'; frameRight.style.width = side + 'px';
+}
+
 const gui = new GUI({ title: 'Terrain' });
 
 const fGrid = gui.addFolder('Grid / size');
@@ -757,6 +1668,9 @@ fMtn.add(params, 'lacunarity', 1.5, 3.0, 0.01).onChange(maybe);
 fMtn.add(params, 'ridged').onChange(maybe).name('ridged (sharp ridges)');
 fMtn.add(params, 'warp', 0, 20, 0.5).onChange(maybe).name('domain warp');
 fMtn.add(params, 'smoothing', 0.5, 3, 0.05).onChange(maybe).name('hill roundness');
+fMtn.add(params, 'growthFront', 0, 3, 0.05).onChange(maybe).name('height: front');
+fMtn.add(params, 'growthBack', 0, 6, 0.05).onChange(maybe).name('height: back');
+fMtn.add(params, 'growthCurve', 0.3, 4, 0.1).onChange(maybe).name('growth curve');
 
 const fPath = gui.addFolder('Path / valley');
 fPath.add(params, 'pathWidth', 2, 60, 0.5).onChange(maybe);
@@ -765,15 +1679,129 @@ fPath.add(params, 'wallCurve', 0.5, 4, 0.1).onChange(maybe).name('wall steepness
 fPath.add(params, 'floorHeight', -20, 40, 0.5).onChange(maybe);
 fPath.add(params, 'floorNoise', 0, 8, 0.1).onChange(maybe).name('floor bumpiness');
 fPath.add(params, 'pathSlope', 0, 120, 1).onChange(maybe).name('net climb (units)');
+fPath.add(params, 'levelStart', -300, 300, 1).onChange(maybe).name('start level');
+fPath.add(params, 'levelEnd', -300, 300, 1).onChange(maybe).name('end level');
+fPath.add(params, 'levelCurve', ['linear', 'ease-in', 'ease-out', 'ease-in-out', 'smoothstep', 'exponential']).onChange(maybe).name('level curve');
+fPath.add(params, 'levelCurvePower', 1, 6, 0.1).onChange(maybe).name('curve power');
 fPath.add(params, 'climbGrade', 0, 40, 0.5).onChange(maybe).name('altitude grade %');
 fPath.add(params, 'climbWaves', 0, 30, 1).onChange(maybe).name('up/down hills');
 fPath.add(params, 'windAmplitude', 0, 80, 1).onChange(maybe).name('wind amplitude');
 fPath.add(params, 'windFrequency', 0, 4, 0.05).onChange(maybe).name('wind S-curves');
 fPath.add(params, 'windPhase', 0, 6.28, 0.01).onChange(maybe).name('wind phase');
 
+const fSurf = gui.addFolder('Surface shader');
+fSurf.add(params, 'surfaceStyle', { 'duotone dunes': 'duotone', 'plain (vertex colour)': 'standard' })
+  .onChange(buildTerrain).name('style');
+fSurf.addColor(params, 'shWarm').onChange(updateShaderUniforms).name('warm faces');
+fSurf.addColor(params, 'shCool').onChange(updateShaderUniforms).name('cool faces');
+fSurf.add(params, 'shBlend', 0.0, 0.5, 0.01).onChange(updateShaderUniforms).name('red↔blue blend');
+fSurf.add(params, 'shBalance', -0.5, 0.5, 0.01).onChange(updateShaderUniforms).name('warm/cool balance');
+const fDuo = fSurf.addFolder('Red/blue mapping');
+fDuo.add(params, 'duotoneMode', Object.keys(DUO_MODES)).onChange(updateShaderUniforms).name('mode');
+fDuo.add(params, 'duoNoiseType', Object.keys(NOISE_TYPES)).onChange(updateShaderUniforms).name('noise type');
+fDuo.add(params, 'duoNoiseScale', 0.002, 0.1, 0.001).onChange(updateShaderUniforms).name('noise scale');
+fDuo.add(params, 'duoNoiseWarp', 0, 2, 0.02).onChange(updateShaderUniforms).name('noise warp');
+fDuo.add(params, 'duoHeight', 0, 1, 0.01).onChange(updateShaderUniforms).name('height influence');
+fDuo.add(params, 'duoHeightLocal').onChange(updateShaderUniforms).name('height: local per-dune');
+fDuo.add(params, 'shLightAz', 0, 6.283, 0.01).onChange(updateShaderUniforms).name('light angle (facing)');
+fSurf.addColor(params, 'shPath').onChange(updateShaderUniforms).name('trail colour');
+const fTrail = fSurf.addFolder('Trail light');
+fTrail.add(params, 'trailSpacing', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('line spacing');
+fTrail.add(params, 'trailLineWidth', 0.02, 0.5, 0.01).onChange(updateShaderUniforms).name('line sharpness');
+fTrail.add(params, 'trailSpill', 0.1, 90, 0.1).onChange(updateShaderUniforms).name('bundle spread');
+fTrail.add(params, 'trailWidth', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('core width');
+fTrail.add(params, 'trailGlow', 0, 4, 0.05).onChange(updateShaderUniforms).name('intensity');
+fTrail.add(params, 'trailClear', 1, 8, 0.05).onChange(updateShaderUniforms).name('striation clearance');
+fSurf.addColor(params, 'shLineColor').onChange(updateShaderUniforms).name('striation tint');
+fSurf.add(params, 'shLineFreq', 10, 200, 1).onChange(updateShaderUniforms).name('striation density');
+fSurf.add(params, 'shLineWidth', 0.01, 0.3, 0.005).onChange(updateShaderUniforms).name('striation width');
+fSurf.add(params, 'shLineIntensity', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation strength');
+fSurf.add(params, 'shLineBlend', Object.keys(LINE_BLENDS)).onChange(updateShaderUniforms).name('striation blend');
+const fFlow = fSurf.addFolder('Flow fog (animated)');
+fFlow.add(params, 'flowFog').onChange(updateShaderUniforms).name('enable');
+fFlow.addColor(params, 'flowColor').onChange(updateShaderUniforms).name('colour');
+fFlow.add(params, 'flowIntensity', 0, 2, 0.01).onChange(updateShaderUniforms).name('intensity');
+fFlow.add(params, 'flowSpeed', 0, 4, 0.05).onChange(updateShaderUniforms).name('drift speed');
+fFlow.add(params, 'flowDensity', 0.02, 0.6, 0.01).onChange(updateShaderUniforms).name('wisp density');
+fFlow.add(params, 'flowScale', 0.004, 0.08, 0.002).onChange(updateShaderUniforms).name('wisp scale');
+fFlow.add(params, 'flowReach', 5, 200, 1).onChange(updateShaderUniforms).name('reach from path');
+
+const fRim = fSurf.addFolder('Fresnel rim light');
+fRim.addColor(params, 'shRimColor').onChange(updateShaderUniforms).name('rim colour');
+fRim.add(params, 'shRimPower', 0.5, 8, 0.1).onChange(updateShaderUniforms).name('rim tightness');
+fRim.add(params, 'shRimIntensity', 0, 2, 0.02).onChange(updateShaderUniforms).name('rim strength');
+
+const fFog = gui.addFolder('Fog').close();
+fFog.addColor(params, 'fogColor').onChange(updateFog).name('colour');
+fFog.add(params, 'fogNear', 0, 2000, 5).onChange(updateFog).name('near');
+fFog.add(params, 'fogFar', 100, 4000, 10).onChange(updateFog).name('far');
+
+const fSun = gui.addFolder('Sun');
+fSun.add(params, 'sunEnable').onChange(updateSun).name('enable');
+fSun.add(params, 'sunAzimuth', 0, 360, 1).onChange(updateSun).name('azimuth °');
+fSun.add(params, 'sunElevation', -10, 90, 1).onChange(updateSun).name('elevation °');
+fSun.add(params, 'sunIntensity', 0, 4, 0.05).onChange(updateSun).name('intensity');
+fSun.addColor(params, 'sunColor').onChange(updateSun).name('colour');
+fSun.add(params, 'sunAmbient', 0, 1, 0.01).onChange(updateSun).name('ambient fill');
+fSun.add(params, 'sunDiscVisible').onChange(updateSun).name('show disc');
+fSun.add(params, 'sunSize', 0.005, 0.3, 0.005).onChange(updateSun).name('disc size');
+fSun.add(params, 'sunHalo', 0, 2, 0.02).onChange(updateSun).name('halo strength');
+fSun.add(params, 'sunHaloPow', 4, 300, 1).onChange(updateSun).name('halo tightness');
+fSun.add(params, 'sunDriveDuotone').onChange(updateSun).name('drive red/blue split');
+const fShadow = fSun.addFolder('Shadows');
+fShadow.add(params, 'shadowEnable').onChange(updateSun).name('enable');
+fShadow.add(params, 'shadowHard').onChange(updateSun).name('hard edges');
+fShadow.add(params, 'shadowStrength', 0, 1, 0.01).onChange(updateSun).name('strength');
+fShadow.add(params, 'shadowDist', 20, 400, 5).onChange(updateSun).name('reach');
+fShadow.add(params, 'shadowSoft', 0.02, 1, 0.01).onChange(updateSun).name('softness');
+fShadow.add(params, 'shadowBias', 0, 4, 0.05).onChange(updateSun).name('bias');
+
+const fSky = gui.addFolder('Sky');
+fSky.addColor(params, 'skyTop').onChange(updateSky).name('top (zenith)');
+fSky.addColor(params, 'skyMid').onChange(updateSky).name('mid');
+fSky.addColor(params, 'skyHorizon').onChange(updateSky).name('horizon');
+fSky.add(params, 'skyHorizonY', 0.02, 1.0, 0.01).onChange(updateSky).name('horizon height');
+fSky.add(params, 'skyMidY', 0.1, 1.5, 0.01).onChange(updateSky).name('mid height');
+fSky.add(params, 'skyNoise', 0, 0.3, 0.005).onChange(updateSky).name('gradient noise');
+fSky.add(params, 'skyNoiseScale', 0.5, 12, 0.1).onChange(updateSky).name('noise scale');
+const fCloud = fSky.addFolder('Clouds');
+fCloud.add(params, 'clouds').onChange(updateSky).name('enable');
+fCloud.addColor(params, 'cloudColor').onChange(updateSky).name('colour');
+fCloud.add(params, 'cloudCoverage', 0, 1, 0.01).onChange(updateSky).name('coverage');
+fCloud.add(params, 'cloudDensity', 0, 1, 0.01).onChange(updateSky).name('density');
+fCloud.add(params, 'cloudScale', 0.2, 5, 0.05).onChange(updateSky).name('scale');
+fCloud.add(params, 'cloudSoftness', 0.02, 0.8, 0.01).onChange(updateSky).name('softness');
+fCloud.add(params, 'cloudSpeed', 0, 5, 0.05).onChange(updateSky).name('drift speed');
+fCloud.add(params, 'cloudHeight', 0, 1, 0.01).onChange(updateSky).name('pattern seed');
+
+const fPost = gui.addFolder('Post-processing');
+fPost.add(params, 'post').name('enable');
+fPost.add(params, 'toneMapping', Object.keys(TONE_MAPS)).onChange(applyToneMapping).name('tone mapping');
+fPost.add(params, 'exposure', 0.2, 2.5, 0.01).onChange(v => { renderer.toneMappingExposure = params.exposure; }).name('exposure');
+fPost.add(params, 'outputGain', 0.1, 2, 0.01).onChange(updateGrade).name('brightness');
+fPost.add(params, 'bloomStrength', 0, 2.5, 0.01).onChange(v => { bloomPass.strength = params.bloomStrength; }).name('bloom strength');
+fPost.add(params, 'bloomRadius', 0, 1.5, 0.01).onChange(v => { bloomPass.radius = params.bloomRadius; }).name('bloom radius');
+fPost.add(params, 'bloomThreshold', 0, 1.5, 0.01).onChange(v => { bloomPass.threshold = params.bloomThreshold; }).name('bloom threshold');
+fPost.add(params, 'vignette', 0, 2, 0.01).onChange(v => { vignettePass.uniforms.darkness.value = params.vignette; }).name('vignette');
+
+const fGrade = fPost.addFolder('Colour grade');
+fGrade.add(params, 'look', Object.keys(LOOKS)).onChange(applyLook).name('look / filter');
+fGrade.add(params, 'brightness', 0.3, 2, 0.01).onChange(updateGrade).name('brightness');
+fGrade.add(params, 'contrast', 0.5, 2, 0.01).onChange(updateGrade).name('contrast');
+fGrade.add(params, 'saturation', 0, 2.5, 0.01).onChange(updateGrade).name('saturation');
+fGrade.add(params, 'vibrance', -1, 1, 0.01).onChange(updateGrade).name('vibrance');
+fGrade.add(params, 'temperature', -0.4, 0.4, 0.01).onChange(updateGrade).name('temperature');
+fGrade.add(params, 'tint', -0.3, 0.3, 0.01).onChange(updateGrade).name('tint (green/magenta)');
+fGrade.add(params, 'hue', -3.14, 3.14, 0.01).onChange(updateGrade).name('hue shift');
+fGrade.add(params, 'grain', 0, 0.3, 0.005).onChange(updateGrade).name('film grain');
+
 const fLine = gui.addFolder('Flow lines');
 fLine.add(params, 'flowLines').onChange(buildFlowLines).name('show flow lines');
-fLine.add(params, 'lineCount', 2, 240, 1).onFinishChange(buildFlowLines).name('line count');
+fLine.add(params, 'lineMode', { 'parallel to path': 'path', 'topographic (contour)': 'contour' })
+  .onChange(buildFlowLines).name('line mode');
+fLine.add(params, 'lineCount', 2, 240, 1).onFinishChange(buildFlowLines).name('count (path mode)');
+fLine.add(params, 'contourLevels', 2, 120, 1).onFinishChange(buildFlowLines).name('levels (contour mode)');
+fLine.add(params, 'contourGridX', 12, 160, 1).onFinishChange(buildFlowLines).name('contour smoothness');
 fLine.add(params, 'lineLift', 0, 3, 0.05).onChange(buildFlowLines).name('lift off surface');
 fLine.add(params, 'lineOpacity', 0.05, 1, 0.01).onChange(updateLineOpacity).name('opacity');
 fLine.addColor(params, 'lineWarm').onChange(buildFlowLines).name('warm (near path)');
@@ -788,8 +1816,13 @@ fCam.add(params, 'flyMode').name('🎥 follow path').onChange(() => {
 fCam.add(params, 'flySpeed', 2, 80, 1).name('speed');
 fCam.add(params, 'flyHeight', 0.5, 30, 0.5).name('camera height');
 fCam.add(params, 'flyLookAhead', 2, 60, 1).name('look ahead');
+fCam.add(params, 'focalLength', 10, 300, 1).onChange(updateLens).name('focal length (mm)');
 fCam.add(params, 'showRunner').name('show runner');
 fCam.add({ restart: () => { runT = 0; } }, 'restart').name('⏮ restart run');
+
+const fFrame = gui.addFolder('Frame / ratio');
+fFrame.add(params, 'frameRatio', Object.keys(FRAME_RATIOS)).onChange(updateFrame).name('aspect ratio');
+fFrame.add(params, 'frameOpacity', 0, 1, 0.01).onChange(updateFrame).name('bar opacity');
 
 const fLook = gui.addFolder('Display');
 fLook.add(params, 'showPath').onChange(buildPathLine).name('show centerline');
@@ -825,6 +1858,14 @@ fSet.add({ load: importSettings }, 'load').name('⬆ Import settings (.json)');
 /*  Loop                                                               */
 /* ------------------------------------------------------------------ */
 buildTerrain();
+updateGrade();
+updatePost();
+applyToneMapping();
+updateFog();
+updateSun();
+updateSky();
+updateLens();
+updateFrame();
 controls.enabled = !params.flyMode;
 
 const hud = document.getElementById('hud');
@@ -834,6 +1875,9 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  bloomPass.setSize(innerWidth, innerHeight);
+  updateFrame();
 });
 
 const clock = new THREE.Clock();
@@ -843,6 +1887,10 @@ let flyTime = 0;
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
+  skyDome.position.copy(camera.position);
+  skyMat.uniforms.uTime.value += dt;
+  if (terrain && terrain.material.isShaderMaterial) terrain.material.uniforms.uTime.value += dt;
+  if (params.grain > 0) gradePass.uniforms.uTime.value = (gradePass.uniforms.uTime.value + dt) % 100;
 
   if (flowCurve && (params.showRunner || params.flyMode)) {
     const prev = runT;
@@ -867,7 +1915,8 @@ renderer.setAnimationLoop(() => {
     controls.update();
   }
 
-  renderer.render(scene, camera);
+  if (params.post) composer.render();
+  else renderer.render(scene, camera);
 });
 </script>
 </body>
