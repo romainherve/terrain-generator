@@ -135,6 +135,9 @@ const params = {
   length: 1600,
   segmentsX: 220,
   segmentsZ: 1200,
+  edgeFalloff: 0.45,  // fraction of the half-width over which relief tapers at the sides
+  edgeCurve: 1.6,     // shape of that taper
+  edgeDrop: 0,        // how much the ground also sinks toward the left/right edges
   // hills — tuned toward soft, billowing dunes (reference relief)
   seed: 1337,
   mountainHeight: 34,
@@ -149,6 +152,20 @@ const params = {
   growthFront: 0.5,   // amplitude multiplier at the start
   growthBack: 2.4,    // amplitude multiplier at the far end
   growthCurve: 1.7,   // >1 stays low longer then ramps up near the back
+  // background mountain — terrain converges into a high peak at the far end
+  peakEnable: true,
+  peakHeight: 340,
+  peakRadius: 720,    // longitudinal reach of the mountain base
+  peakAspect: 0.6,    // <1 = narrower across the width (more of a peak, less a wall)
+  peakPos: 0.98,      // 0..1 along the run (1 = back edge)
+  peakCurve: 2.2,     // >1 sharpens toward a summit
+  peakRidge: 0.3,     // noise modulation on the slopes
+  peakSkirt: 0.8,     // route the path around the peak's side (0 = straight over the top)
+  // fine detail noise (sharp ridges on the slopes, concentrated on the mountain)
+  detailAmount: 6,
+  detailScale: 0.08,  // higher = finer ridges
+  detailNoiseType: 'ridged', // fbm | ridged | billow | cellular | cracks | turbulence
+  detailPeakBoost: 2.5, // extra detail strength on the mountain
   // path / valley
   pathWidth: 4,
   wallWidth: 38,
@@ -165,6 +182,8 @@ const params = {
   windAmplitude: 22,
   windFrequency: 0.9, // number of S-curves over the length
   windPhase: 0.0,
+  windGrowthBack: 3.0, // path winds wider toward the back (switchbacks up the mountain)
+  windGrowthCurve: 2.0,
   // flow lines (the glowing contours that follow the path) — off by default now
   // that the duotone shader draws striations directly on the surface
   flowLines: false,
@@ -207,7 +226,12 @@ const params = {
   shLineFreq: 80,            // density of topographic striations
   shLineWidth: 0.07,         // striation thickness
   shLineIntensity: 0.28,
+  shLineMap: 'height',      // what the striations follow (topography by default)
   shLineBlend: 'add',       // striation blend mode
+  shLineFromSurface: true,  // striation colour = local red/blue (vs the fixed tint)
+  shLineBoost: 1.4,         // brightness of the surface-derived line colour
+  shLineTrailMix: 1.0,      // how strongly lines near the trail take the trail colour
+  shLineFar: 0.5,           // distance LOD target (lower = keep lines visible further)
   shLightAz: 0.5,            // light azimuth (radians) — sets which faces go warm
   shBlend: 0.42,            // red<->blue blend softness (0 hard, 0.5 full gradient)
   shBalance: 0.0,          // bias the warm/cool balance
@@ -216,12 +240,14 @@ const params = {
   duoNoiseType: 'fbm',      // fbm | ridged | billow | cellular
   duoNoiseScale: 0.02,
   duoNoiseWarp: 0.0,
+  duoNoiseSeed: 0,         // shifts the noise pattern
   duoHeight: 0.0,           // blend any mode toward pure height mapping
   duoHeightLocal: true,     // height = local per-dune (true) vs whole-mesh world height (false)
   // fresnel rim light
   shRimColor: '#bcd4ff',
   shRimPower: 3.2,
   shRimIntensity: 0.6,
+  shRimBlend: 'add',   // how the rim colour combines with the surface
   // gradient sky (3 stops + noise)
   skyTop: '#070f30',
   skyMid: '#1b3a78',
@@ -230,6 +256,10 @@ const params = {
   skyMidY: 0.62,       // where mid blends into top
   skyNoise: 0.05,      // break up the gradient banding
   skyNoiseScale: 3.0,
+  // background glow behind the mountain
+  bgGlow: 0.8,
+  bgGlowColor: '#ff8a4d',
+  bgGlowDiffusion: 0.3, // angular spread of the glow
   // procedural clouds
   clouds: true,
   cloudColor: '#cdd9f5',
@@ -270,6 +300,7 @@ const params = {
   shadowEnable: true,
   shadowHard: false,    // crisp cast shadows instead of soft penumbra
   shadowStrength: 0.8,
+  shadowDarken: 0.5,    // extra darkening of shadowed areas (1 = none, 0 = black)
   shadowDist: 140,      // how far to look for occluding dunes
   shadowSoft: 0.18,     // penumbra softness (smaller = sharper)
   shadowBias: 0.6,
@@ -277,6 +308,14 @@ const params = {
   fogColor: '#0b1330',
   fogNear: 200,
   fogFar: 1200,
+  fogHeightFade: true,  // thin the fog above an altitude so the peak rises above it
+  fogHeight: 90,        // world Y where the fog starts clearing
+  fogHeightBand: 240,   // thickness of the clearing transition
+  // valley fog — mist that pools in the low troughs between dunes (local height)
+  valleyFog: 0.5,
+  valleyFogColor: '#7d93c8',
+  valleyBottom: 0.08,   // local height fully fogged
+  valleyTop: 0.55,      // local height where fog ends (crest)
   // post-processing
   post: true,
   toneMapping: 'ACESFilmic',
@@ -299,8 +338,44 @@ const params = {
   // look
   showPath: false,
   wireframe: false,
+  showFps: true,
   autoUpdate: true,
+  // named camera views { name: {px,py,pz, tx,ty,tz, focal} } — saved with the JSON
+  cameraBookmarks: {},
 };
+
+// Default scene preset — baked from "Latest - parameters.json"
+Object.assign(params, {
+  "width": 400, "length": 2209, "segmentsX": 297, "segmentsZ": 1863,
+  "seed": 22393, "mountainHeight": 17, "noiseScale": 0.012, "octaves": 1,
+  "persistence": 0.47, "lacunarity": 1.89, "ridged": false, "smoothing": 1.75, "warp": 2,
+  "growthFront": 1.05, "growthBack": 1.3, "growthCurve": 1.9,
+  "pathWidth": 2, "wallWidth": 20, "wallCurve": 0.8, "floorHeight": -20, "floorNoise": 0,
+  "pathSlope": 14, "levelStart": 0, "levelEnd": 163, "levelCurve": "exponential", "levelCurvePower": 2.5,
+  "climbGrade": 10, "climbWaves": 7, "windAmplitude": 23, "windFrequency": 2.85, "windPhase": 0.02,
+  "flowLines": false, "lineMode": "path", "contourLevels": 60, "contourGridX": 84,
+  "lineCount": 128, "lineLift": 0.6, "lineOpacity": 0.94, "lineWarm": "#ffa424", "lineCool": "#7db0ff", "includeLinesInExport": true,
+  "texWidth": 3456, "texHeight": 256, "texLineWidth": 6.5, "texGlow": 5, "texMono": true,
+  "texTransparent": false, "texBackground": "#05060a", "texIncludeCenterline": false, "texFlipU": false, "texFlipV": true,
+  "flyMode": false, "flySpeed": 50, "flyHeight": 2, "flyLookAhead": 30, "showRunner": true,
+  "focalLength": 60, "frameRatio": "9:16", "frameOpacity": 1,
+  "surfaceStyle": "duotone", "shWarm": "#ff0000", "shCool": "#1349c9", "shPath": "#ffa629", "shLineColor": "#ffffff",
+  "shLineFreq": 500, "shLineWidth": 0.3, "shLineIntensity": 1, "shLineBlend": "overlay", "shLightAz": 1.61, "shBlend": 0.29, "shBalance": -0.18,
+  "duotoneMode": "noise", "duoNoiseType": "cellular", "duoNoiseScale": 0.004, "duoNoiseWarp": 0.16, "duoHeight": 0.43, "duoHeightLocal": true,
+  "shRimColor": "#b8beff", "shRimPower": 8, "shRimIntensity": 0.56,
+  "skyTop": "#050d29", "skyMid": "#2552ad", "skyHorizon": "#fffdeb", "skyHorizonY": 0.13, "skyMidY": 0.24, "skyNoise": 0.3, "skyNoiseScale": 1.8,
+  "clouds": true, "cloudColor": "#ffffe5", "cloudCoverage": 0.55, "cloudDensity": 0.65, "cloudScale": 0.65, "cloudSoftness": 0.58, "cloudSpeed": 2.3, "cloudHeight": 0.62,
+  "trailWidth": 3.3, "trailSpill": 0.9, "trailGlow": 2.7, "trailSpacing": 0.9, "trailLineWidth": 0.19, "trailClear": 5.3,
+  "flowFog": true, "flowColor": "#9ec0ff", "flowIntensity": 0.37, "flowDensity": 0.6, "flowScale": 0.012, "flowSpeed": 2.25, "flowReach": 5,
+  "sunEnable": true, "sunAzimuth": 58, "sunElevation": 16, "sunIntensity": 1.95, "sunColor": "#ffe4bd", "sunAmbient": 0.64,
+  "sunSize": 0.085, "sunHalo": 0.5, "sunHaloPow": 104, "sunDiscVisible": false, "sunDriveDuotone": false,
+  "shadowEnable": true, "shadowHard": false, "shadowStrength": 0.59, "shadowDist": 110, "shadowSoft": 0.46, "shadowBias": 0.8,
+  "fogColor": "#8b9bda", "fogNear": 1290, "fogFar": 2630,
+  "post": true, "toneMapping": "Neutral", "exposure": 1.01, "outputGain": 0.33,
+  "bloomStrength": 0.31, "bloomRadius": 1.16, "bloomThreshold": 0.79, "vignette": 1.16,
+  "look": "cold", "brightness": 1.31, "contrast": 1.12, "saturation": 1.14, "vibrance": 0.08, "temperature": 0.06, "tint": 0.01, "hue": 0, "grain": 0.045,
+  "showPath": false, "wireframe": false, "autoUpdate": true,
+});
 
 // height/length used as world units. noiseScale multiplies world coords.
 
@@ -329,6 +404,10 @@ const skyMat = new THREE.ShaderMaterial({
     uMidY: { value: params.skyMidY },
     uNoise: { value: params.skyNoise },
     uNoiseScale: { value: params.skyNoiseScale },
+    uBgGlow: { value: params.bgGlow },
+    uBgGlowColor: { value: new THREE.Color(params.bgGlowColor) },
+    uBgGlowSize: { value: params.bgGlowDiffusion },
+    uBgGlowDir: { value: new THREE.Vector3(0, 0.3, 1) },
     uClouds: { value: params.clouds ? 1 : 0 },
     uCloudColor: { value: new THREE.Color(params.cloudColor) },
     uCloudCover: { value: params.cloudCoverage },
@@ -347,8 +426,8 @@ const skyMat = new THREE.ShaderMaterial({
   },
   vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `
-    uniform vec3 uTop, uMid, uHorizon, uCloudColor, uSunColor, uSunDir;
-    uniform float uHorizonY, uMidY, uNoise, uNoiseScale;
+    uniform vec3 uTop, uMid, uHorizon, uCloudColor, uSunColor, uSunDir, uBgGlowColor, uBgGlowDir;
+    uniform float uHorizonY, uMidY, uNoise, uNoiseScale, uBgGlow, uBgGlowSize;
     uniform float uClouds, uCloudCover, uCloudDensity, uCloudScale, uCloudSoft, uCloudSpeed, uCloudHeight, uTime;
     uniform float uSunDisc, uSunSize, uSunHalo, uSunHaloPow;
     varying vec3 vDir;
@@ -371,6 +450,11 @@ const skyMat = new THREE.ShaderMaterial({
       // subtle noise to break gradient banding
       if (uNoise > 0.0) grad += (fbm(dir * uNoiseScale) - 0.5) * uNoise;
       vec3 col = grad;
+      // background glow (haloes the mountain)
+      if (uBgGlow > 0.0) {
+        float ang = acos(clamp(dot(dir, normalize(uBgGlowDir)), -1.0, 1.0));
+        col += uBgGlowColor * exp(-(ang * ang) / max(1e-4, uBgGlowSize)) * uBgGlow;
+      }
       // procedural clouds projected onto a sky plane
       if (uClouds > 0.5 && y > 0.01) {
         vec2 cp = dir.xz / max(0.06, y) * uCloudScale;
@@ -404,6 +488,9 @@ function updateSky() {
   u.uMidY.value = Math.max(params.skyHorizonY + 0.02, params.skyMidY);
   u.uNoise.value = params.skyNoise;
   u.uNoiseScale.value = params.skyNoiseScale;
+  u.uBgGlow.value = params.bgGlow;
+  u.uBgGlowColor.value.set(params.bgGlowColor);
+  u.uBgGlowSize.value = params.bgGlowDiffusion;
   u.uClouds.value = params.clouds ? 1 : 0;
   u.uCloudColor.value.set(params.cloudColor);
   u.uCloudCover.value = params.cloudCoverage;
@@ -429,20 +516,37 @@ const GradeShader = {
     uSaturation: { value: 1.0 }, uVibrance: { value: 0.0 },
     uTemperature: { value: 0.0 }, uTint: { value: 0.0 },
     uHue: { value: 0.0 }, uGrain: { value: 0.0 }, uTime: { value: 0.0 },
-    uGain: { value: 1.0 },
+    uGain: { value: 1.0 }, uNeutral: { value: 0.0 },
   },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `
     uniform sampler2D tDiffuse;
-    uniform float uBrightness, uContrast, uSaturation, uVibrance, uTemperature, uTint, uHue, uGrain, uTime, uGain;
+    uniform float uBrightness, uContrast, uSaturation, uVibrance, uTemperature, uTint, uHue, uGrain, uTime, uGain, uNeutral;
     varying vec2 vUv;
     vec3 hueShift(vec3 col, float h){
       const vec3 k = vec3(0.57735);
       float c = cos(h);
       return col * c + cross(k, col) * sin(h) + k * dot(k, col) * (1.0 - c);
     }
+    // Khronos PBR Neutral tone mapping — preserves hue & saturation of the
+    // endpoint colours (no ACES/Cineon channel cross-contamination).
+    vec3 PBRNeutral(vec3 color){
+      const float startCompression = 0.8 - 0.04;
+      const float desaturation = 0.15;
+      float x = min(color.r, min(color.g, color.b));
+      float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+      color -= offset;
+      float peak = max(color.r, max(color.g, color.b));
+      if (peak < startCompression) return color;
+      float d = 1.0 - startCompression;
+      float newPeak = 1.0 - d * d / (peak + d - startCompression);
+      color *= newPeak / peak;
+      float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+      return mix(color, newPeak * vec3(1.0), g);
+    }
     void main(){
       vec3 c = texture2D(tDiffuse, vUv).rgb;
+      if (uNeutral > 0.5) c = PBRNeutral(c);
       c *= uBrightness;
       c.r *= 1.0 + uTemperature; c.b *= 1.0 - uTemperature;   // warm/cool
       c.g *= 1.0 + uTint;                                     // green/magenta
@@ -530,9 +634,15 @@ const TONE_MAPS = {
   ACESFilmic: THREE.ACESFilmicToneMapping,
 };
 if (THREE.AgXToneMapping !== undefined) TONE_MAPS.AgX = THREE.AgXToneMapping;
-if (THREE.NeutralToneMapping !== undefined) TONE_MAPS.Neutral = THREE.NeutralToneMapping;
+TONE_MAPS.Neutral = 'neutral'; // custom (Khronos PBR Neutral, applied in the grade pass)
 function applyToneMapping() {
-  renderer.toneMapping = TONE_MAPS[params.toneMapping] ?? THREE.ACESFilmicToneMapping;
+  if (params.toneMapping === 'Neutral') {
+    renderer.toneMapping = THREE.NoToneMapping;     // OutputPass just does sRGB
+    gradePass.uniforms.uNeutral.value = 1;          // grade pass applies the tonemap
+  } else {
+    renderer.toneMapping = TONE_MAPS[params.toneMapping] ?? THREE.ACESFilmicToneMapping;
+    gradePass.uniforms.uNeutral.value = 0;
+  }
 }
 
 function updateFog() {
@@ -584,6 +694,7 @@ function updateSun() {
     u.uAmbient.value = params.sunAmbient;
     u.uShadowEnable.value = params.shadowEnable ? 1 : 0;
     u.uShadowHard.value = params.shadowHard ? 1 : 0;
+    u.uShadowDarken.value = params.shadowDarken;
     u.uShadowStrength.value = params.shadowStrength;
     u.uShadowDist.value = params.shadowDist;
     u.uShadowSoft.value = params.shadowSoft;
@@ -628,11 +739,30 @@ const smoothstep = (e0, e1, x) => {
   return t * t * (3 - 2 * t);
 };
 
-// centerline x at a given z
-function pathCenterX(z) {
+// winding amplitude grows toward the back so the path switchbacks up the mountain
+function windFactor(u) {
+  return 1 + (params.windGrowthBack - 1) * Math.pow(Math.min(1, Math.max(0, u)), params.windGrowthCurve);
+}
+// lateral steer that pushes the path to one side as it nears the peak, so it
+// routes around the summit instead of climbing straight over it.
+function pathSkirt(z) {
+  if (!params.peakEnable || !params.peakSkirt) return 0;
+  const L = params.length;
+  const u = (z + L / 2) / L;
+  const spread = Math.max(0.01, (params.peakRadius / L) * 1.1);
+  const g = Math.exp(-Math.pow((u - params.peakPos) / spread, 2));
+  return params.peakSkirt * params.width * 0.3 * g;
+}
+// centerline x at a given z. grown=false gives the un-amplified, un-skirted path
+// (used to anchor the mountain so the trail winds across it, not moves it).
+function pathCenterX(z, grown = true) {
   const L = params.length;
   const u = (z + L / 2) / L; // 0..1 front->back
-  return params.windAmplitude * Math.sin(u * Math.PI * 2 * params.windFrequency + params.windPhase);
+  const amp = params.windAmplitude * (grown ? windFactor(u) : 1);
+  let x = amp * Math.sin(u * Math.PI * 2 * params.windFrequency + params.windPhase);
+  if (grown) x += pathSkirt(z);
+  const lim = params.width * 0.47;
+  return Math.max(-lim, Math.min(lim, x));
 }
 // rolling up/down altitude offset along the run, sized so the steepest
 // section is about `climbGrade` percent (rise / horizontal run).
@@ -655,6 +785,22 @@ function levelEase(u) {
     case 'exponential': { const k = p * 2; return (Math.exp(k * u) - 1) / (Math.exp(k) - 1); }
     default: return u; // linear
   }
+}
+
+// background mountain: a radial peak at the far end, centred on the path,
+// that the dunes and the trail converge into (keeps the path continuous up it)
+function peakAt(x, z) {
+  if (!params.peakEnable || params.peakHeight <= 0) return 0;
+  const L = params.length;
+  const cz = -L / 2 + params.peakPos * L;
+  const cx = pathCenterX(Math.min(L / 2, cz), false); // anchor mountain to the un-wound path
+  const dx = (x - cx) / Math.max(1, params.peakRadius * params.peakAspect);
+  const dz = (z - cz) / Math.max(1, params.peakRadius);
+  const d = Math.sqrt(dx * dx + dz * dz);
+  if (d >= 1) return 0;
+  const f = Math.pow(1 - d, params.peakCurve);
+  const ridge = 1 + params.peakRidge * (fbm(x, z) - 0.5) * 2;
+  return params.peakHeight * f * Math.max(0, ridge);
 }
 
 // floor height at a given z: net climb toward the back + rolling up/down
@@ -692,6 +838,39 @@ function fbm(x, z) {
   return h;
 }
 
+// higher-frequency detail layer with selectable noise type
+function hash2(x, y) { const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); }
+function worley2(x, z, edge) {
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  let d1 = 9, d2 = 9;
+  for (let gz = -1; gz <= 1; gz++) for (let gx = -1; gx <= 1; gx++) {
+    const ox = hash2(ix + gx, iz + gz), oz = hash2(ix + gx + 31.4, iz + gz + 17.1);
+    const rx = gx + ox - fx, rz = gz + oz - fz, d = rx * rx + rz * rz;
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+  }
+  return edge ? Math.min(1, Math.sqrt(d2) - Math.sqrt(d1)) : Math.min(1, Math.sqrt(d1));
+}
+function detailNoise(x, z) {
+  const type = params.detailNoiseType;
+  let amp = 1, freq = 1, sum = 0, norm = 0;
+  const s = params.detailScale;
+  for (let o = 0; o < 3; o++) {
+    const px = x * s * freq + 120.5, pz = z * s * freq - 87.3;
+    let n;
+    if (type === 'cellular') n = 1 - worley2(px, pz, false);
+    else if (type === 'cracks') n = worley2(px, pz, true);
+    else {
+      const sn = noise.noise2D(px, pz); // -1..1
+      if (type === 'ridged') { n = 1 - Math.abs(sn); n = n * n; }
+      else if (type === 'billow') n = Math.abs(sn);
+      else if (type === 'turbulence') { n = Math.abs(sn); n = n * n; }
+      else n = sn * 0.5 + 0.5; // fbm
+    }
+    sum += n * amp; norm += amp; amp *= 0.5; freq *= 2.0;
+  }
+  return sum / norm;
+}
+
 // full height + which fraction of mountain is present (0 on path, 1 on peaks)
 function sample(x, z) {
   const cx = pathCenterX(z);
@@ -703,13 +882,26 @@ function sample(x, z) {
   const gu = Math.min(1, Math.max(0, (z + params.length / 2) / params.length)); // 0 front .. 1 back
   const growth = params.growthFront + (params.growthBack - params.growthFront) * Math.pow(gu, params.growthCurve);
   const mountain = fbm(x, z) * params.mountainHeight * growth;
-  // taper mountains down at the outer x edges so the slab edges aren't a cliff wall
-  const edge = 1 - smoothstep(params.width * 0.5 - 6, params.width * 0.5, Math.abs(x));
+  // side falloff: relief (and optionally altitude) tapers toward the left/right
+  // edges so the landscape resolves naturally instead of cutting off.
+  const halfW = params.width * 0.5;
+  const swRaw = 1 - smoothstep(halfW * (1 - params.edgeFalloff), halfW, Math.abs(x));
+  const sw = Math.pow(swRaw, params.edgeCurve);
   const groundNoise = (noise.noise2D(x * 0.08, z * 0.08)) * params.floorNoise;
-  const y = floorY + groundNoise * (1 - valley) + mountain * valley * (0.25 + 0.75 * edge + 0.0);
-  // local height: 0 at the valley floor -> 1 at a full peak, regardless of world Y
+  const reliefAbove = groundNoise * (1 - valley) + mountain * valley;
+  const yDunes = floorY + reliefAbove * sw;
+  // local height: 0 at the valley floor -> 1 at a full dune peak (excludes the big mountain)
   const denom = params.mountainHeight * Math.max(0.0001, growth);
-  const relHeight = Math.min(1, Math.max(0, (y - floorY) / denom));
+  const relHeight = Math.min(1, Math.max(0, (reliefAbove * sw) / denom));
+  const peakV = peakAt(x, z);
+  // fine detail: only on the background mountain (gated by peak presence)
+  let detail = 0;
+  if (params.detailAmount > 0 && params.peakHeight > 0) {
+    const peakN = Math.min(1, peakV / params.peakHeight);
+    const mask = Math.min(1, peakN * (1 + params.detailPeakBoost)); // reach down the flanks
+    detail = (detailNoise(x, z) - 0.5) * params.detailAmount * valley * sw * mask;
+  }
+  const y = yDunes + peakV * sw - (1 - swRaw) * params.edgeDrop + detail;
   return { y, valley, relHeight };
 }
 
@@ -721,9 +913,10 @@ const standardMaterial = () => new THREE.MeshStandardMaterial({
   wireframe: params.wireframe, flatShading: false,
 });
 
-const LINE_BLENDS = { add: 0, multiply: 1, screen: 2, overlay: 3, normal: 4 };
+const LINE_BLENDS = { add: 0, multiply: 1, screen: 2, overlay: 3, normal: 4, 'color-dodge': 5, lighten: 6, 'soft-light': 7, glow: 8 };
 const DUO_MODES = { facing: 0, noise: 1, height: 2 };
-const NOISE_TYPES = { fbm: 0, ridged: 1, billow: 2, cellular: 3 };
+const STRIATION_MAPS = { height: 0, lengthwise: 1, across: 2, 'from path': 3, radial: 4, angular: 5 };
+const NOISE_TYPES = { fbm: 0, ridged: 1, billow: 2, cellular: 3, cracks: 4, marble: 5, bands: 6, turbulence: 7 };
 
 const TERRAIN_VERT = /* glsl */`
   attribute float aValley;
@@ -746,17 +939,20 @@ const TERRAIN_VERT = /* glsl */`
 const TERRAIN_FRAG = /* glsl */`
   precision highp float;
   uniform vec3 uWarm, uCool, uPath, uLineColor, uHaze, uRimColor;
-  uniform float uLineFreq, uLineWidth, uLineIntensity;
-  uniform int uLineBlend;
-  uniform float uMinY, uMaxY, uFogNear, uFogFar;
+  uniform float uLineFreq, uLineWidth, uLineIntensity, uLineFromSurface, uLineBoost, uLineTrailMix, uLineFar;
+  uniform int uLineBlend, uRimBlend, uLineMap;
+  uniform float uMinY, uMaxY, uFogNear, uFogFar, uFogHeight, uFogHeightBand, uFogHeightFade;
+  uniform float uValleyFog, uValleyTop, uValleyBottom;
+  uniform vec3 uValleyColor;
   uniform float uBlendLo, uBlendHi, uBalance, uRimPower, uRimIntensity;
-  uniform float uWindAmp, uWindFreq, uWindPhase, uLen;
+  uniform float uWindAmp, uWindFreq, uWindPhase, uLen, uWindGrowth, uWindGrowthCurve;
+  uniform float uPeakSkirt, uPeakPos, uPeakRadius;
   uniform float uTrailWidth, uTrailSpill, uTrailGlow, uTrailSpacing, uTrailLineWidth, uTrailClear;
   uniform vec3 uLightDir;
   uniform float uSunEnable, uSunIntensity, uAmbient;
   uniform vec3 uSunDir, uSunColor;
   uniform sampler2D uHeightMap;
-  uniform float uShadowEnable, uShadowStrength, uShadowDist, uShadowSoft, uShadowBias, uWidth, uShadowHard;
+  uniform float uShadowEnable, uShadowStrength, uShadowDist, uShadowSoft, uShadowBias, uWidth, uShadowHard, uShadowDarken;
   #define SHADOW_STEPS 48
   // heightfield self-shadow: march toward the sun, sampling the baked heights
   float shadowFactor(vec3 wp, vec3 sdir) {
@@ -782,7 +978,7 @@ const TERRAIN_FRAG = /* glsl */`
     return 1.0 - (1.0 - res) * uShadowStrength;
   }
   uniform int uDuoMode, uDuoNoiseType;
-  uniform float uDuoNoiseScale, uDuoNoiseWarp, uDuoHeight;
+  uniform float uDuoNoiseScale, uDuoNoiseWarp, uDuoHeight, uDuoSeed;
   uniform float uTime, uFlowFog, uFlowIntensity, uFlowDensity, uFlowScale, uFlowSpeed, uFlowReach;
   uniform vec3 uFlowColor;
   float h31(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
@@ -805,12 +1001,48 @@ const TERRAIN_FRAG = /* glsl */`
     }
     return clamp(sqrt(d), 0.0, 1.0);
   }
+  float worleyEdge3(vec3 p){
+    vec3 ip=floor(p), fp=fract(p); float d1=1.0, d2=1.0;
+    for(int z=-1;z<=1;z++) for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++){
+      vec3 g=vec3(float(x),float(y),float(z));
+      vec3 o=vec3(h31(ip+g), h31(ip+g+31.0), h31(ip+g+71.0));
+      vec3 r=g+o-fp; float d=dot(r,r);
+      if(d<d1){ d2=d1; d1=d; } else if(d<d2){ d2=d; }
+    }
+    return clamp(sqrt(d2)-sqrt(d1), 0.0, 1.0);
+  }
   float duoNoise(vec3 p){
+    p += vec3(uDuoSeed * 17.3, uDuoSeed * 31.7, uDuoSeed * 8.1);   // seed shifts the field
     if(uDuoNoiseWarp > 0.0){ vec3 w=vec3(fbm3(p+1.3), fbm3(p+5.2), fbm3(p+9.7)); p += (w-0.5)*uDuoNoiseWarp; }
     if(uDuoNoiseType==1) return ridged3(p);
     if(uDuoNoiseType==2) return billow3(p);
-    if(uDuoNoiseType==3) return worley3(p);
+    if(uDuoNoiseType==3) return worley3(p);                         // cellular
+    if(uDuoNoiseType==4) return worleyEdge3(p);                     // cracks (cell edges)
+    if(uDuoNoiseType==5) return 0.5 + 0.5*sin((p.x+p.z)*0.5 + fbm3(p)*6.2831853); // marble
+    if(uDuoNoiseType==6) return smoothstep(0.35, 0.65, 0.5 + 0.5*sin(fbm3(p)*10.0)); // bands
+    if(uDuoNoiseType==7) return abs(fbm3(p)*2.0 - 1.0);             // turbulence (sharp veins)
     return fbm3(p);
+  }
+  // blend layer s onto b with opacity a using mode m
+  vec3 blendMode(vec3 b, vec3 s, float a, int m){
+    vec3 r;
+    if(m==1) r = b * s;                                                   // multiply
+    else if(m==2) r = 1.0 - (1.0-b)*(1.0-s);                              // screen
+    else if(m==3) r = mix(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), step(0.5,b)); // overlay
+    else if(m==4) r = s;                                                  // normal
+    else if(m==5) r = min(b / max(vec3(1e-3), 1.0 - s), vec3(6.0));       // color dodge
+    else if(m==6) r = max(b, s);                                          // lighten
+    else if(m==7) r = mix(2.0*b*s + b*b*(1.0-2.0*s), sqrt(b)*(2.0*s-1.0)+2.0*b*(1.0-s), step(0.5,s)); // soft light
+    else if(m==8) r = b * (1.0 + s);                                      // glow (brighten base by line, keeps hue)
+    else r = b + s;                                                       // add
+    return mix(b, r, a);
+  }
+  // one constant-pixel-width contour line at a given frequency
+  float contourLine(float v, float freq){
+    float coord = v * freq;
+    float dco = max(fwidth(coord), 1e-5);
+    float dist = abs(fract(coord) - 0.5) / dco;
+    return 1.0 - clamp(dist - uLineWidth * 8.0, 0.0, 1.0);
   }
   #define TAU 6.2831853
   varying vec3 vWorldNormal;
@@ -848,12 +1080,21 @@ const TERRAIN_FRAG = /* glsl */`
       float ndl = max(dot(N, uSunDir), 0.0) * sh;
       base = base * (uAmbient + (1.0 - uAmbient) * ndl * uSunIntensity)
              + uSunColor * (ndl * ndl) * uSunIntensity * 0.18;
+      // extra darkening of cast/self shadows for contrast (below ambient)
+      float occ = clamp((1.0 - sh) / max(0.001, uShadowStrength), 0.0, 1.0);
+      base *= mix(1.0, uShadowDarken, occ);
     }
 
     // trail geometry along the winding centreline (computed first so the
     // topographic striations can be masked out wherever the trail sits)
     float u = (vWorldPos.z + uLen * 0.5) / uLen;
-    float cx = uWindAmp * sin(u * TAU * uWindFreq + uWindPhase);
+    float wf = 1.0 + (uWindGrowth - 1.0) * pow(clamp(u, 0.0, 1.0), uWindGrowthCurve);
+    float cx = uWindAmp * wf * sin(u * TAU * uWindFreq + uWindPhase);
+    if (uPeakSkirt != 0.0) {
+      float spread = max(0.01, (uPeakRadius / uLen) * 1.1);
+      cx += uPeakSkirt * uWidth * 0.3 * exp(-pow((u - uPeakPos) / spread, 2.0));
+    }
+    cx = clamp(cx, -uWidth * 0.47, uWidth * 0.47);
     float sx = vWorldPos.x - cx;      // signed lateral distance from the centreline
     float pd = abs(sx);
     float env = exp(-pd / max(0.05, uTrailSpill));       // bundle concentration
@@ -863,21 +1104,34 @@ const TERRAIN_FRAG = /* glsl */`
 
     // topographic striations following the relief — faded out over the trail
     // so the elevation lines never cross the glowing path
-    float bands = abs(fract(elev * uLineFreq) - 0.5) * 2.0;
-    float line = smoothstep(uLineWidth, 0.0, bands);
+    // what the striation lines follow
+    float lc;
+    if (uLineMap == 1) lc = (vWorldPos.z + uLen * 0.5) / uLen;          // lengthwise (across the run)
+    else if (uLineMap == 2) lc = (vWorldPos.x + uWidth * 0.5) / uWidth; // across (parallel to the run)
+    else if (uLineMap == 3) lc = abs(sx) / max(1.0, uWidth * 0.5);      // bands following the path
+    else if (uLineMap == 4) lc = length(vWorldPos.xz) / max(1.0, uLen); // radial from origin
+    else if (uLineMap == 5) lc = atan(vWorldPos.x, vWorldPos.z) / 6.2831853 + 0.5; // angular
+    else lc = elev;                                                     // height (topographic)
+    // constant-width contour lines with mip-style LOD so they stay resolvable
+    // (visible) into the distance instead of washing out to gray on the far peak
+    float dens = fwidth(lc) * uLineFreq;                 // ~lines per pixel at base freq
+    float lod = max(0.0, log2(dens / uLineFar));         // 0 near, grows with distance
+    float f0 = uLineFreq / exp2(floor(lod));
+    float line = mix(contourLine(lc, f0), contourLine(lc, f0 * 0.5), fract(lod));
     float la = line * uLineIntensity * (1.0 - trailMask);
-    if (uLineBlend == 0) base += uLineColor * la;                                     // add
-    else if (uLineBlend == 1) base = mix(base, base * uLineColor, la);               // multiply
-    else if (uLineBlend == 2) base = mix(base, 1.0 - (1.0 - base) * (1.0 - uLineColor), la); // screen
-    else if (uLineBlend == 3) {                                                       // overlay
-      vec3 ov = mix(2.0 * base * uLineColor, 1.0 - 2.0 * (1.0 - base) * (1.0 - uLineColor), step(0.5, base));
-      base = mix(base, ov, la);
-    } else base = mix(base, uLineColor, la);                                          // normal
+    // line colour: local red/blue, shifting to the trail colour near the path
+    vec3 lineCol = uLineColor;
+    if (uLineFromSurface > 0.5) {
+      lineCol = base * uLineBoost;
+      lineCol = mix(lineCol, uPath, clamp(env * uLineTrailMix, 0.0, 1.0));
+    }
+    base = blendMode(base, lineCol, la, uLineBlend);
 
     // fresnel rim light on grazing edges (bright dune silhouettes)
     vec3 V = normalize(cameraPosition - vWorldPos);
     float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), uRimPower);
-    base += uRimColor * fres * uRimIntensity;
+    float ra = clamp(fres * uRimIntensity, 0.0, 1.0);
+    base = blendMode(base, uRimColor, ra, uRimBlend);
 
     // glowing trail: a bundle of parallel light lines, densest at the centre
     float lp = abs(fract(sx / max(0.2, uTrailSpacing) + 0.5) - 0.5) * 2.0;
@@ -895,9 +1149,18 @@ const TERRAIN_FRAG = /* glsl */`
       base += uFlowColor * wisp * reach * uFlowIntensity;
     }
 
-    // distance haze toward the horizon
+    // valley fog: mist pooling in the local low troughs (keeps the trail clear)
+    if (uValleyFog > 0.0) {
+      float vf = (1.0 - smoothstep(uValleyBottom, uValleyTop, vRel)) * (1.0 - trailMask);
+      base = mix(base, uValleyColor, vf * uValleyFog);
+    }
+
+    // distance haze toward the horizon, thinned above a height (peak above the fog)
     float d = length(vWorldPos - cameraPosition);
     float f = clamp((d - uFogNear) / max(1.0, (uFogFar - uFogNear)), 0.0, 1.0);
+    if (uFogHeightFade > 0.5) {
+      f *= 1.0 - smoothstep(uFogHeight, uFogHeight + uFogHeightBand, vWorldPos.y);
+    }
     base = mix(base, uHaze, f * 0.9);
 
     gl_FragColor = vec4(base, 1.0);
@@ -917,6 +1180,11 @@ function shaderUniforms(geo) {
     uLineFreq: { value: params.shLineFreq },
     uLineWidth: { value: params.shLineWidth },
     uLineIntensity: { value: params.shLineIntensity },
+    uLineFromSurface: { value: params.shLineFromSurface ? 1 : 0 },
+    uLineBoost: { value: params.shLineBoost },
+    uLineTrailMix: { value: params.shLineTrailMix },
+    uLineFar: { value: params.shLineFar },
+    uLineMap: { value: STRIATION_MAPS[params.shLineMap] ?? 0 },
     uLineBlend: { value: LINE_BLENDS[params.shLineBlend] ?? 0 },
     uBlendLo: { value: 0.5 - params.shBlend },
     uBlendHi: { value: 0.5 + params.shBlend },
@@ -925,6 +1193,7 @@ function shaderUniforms(geo) {
     uDuoNoiseType: { value: NOISE_TYPES[params.duoNoiseType] ?? 0 },
     uDuoNoiseScale: { value: params.duoNoiseScale },
     uDuoNoiseWarp: { value: params.duoNoiseWarp },
+    uDuoSeed: { value: params.duoNoiseSeed },
     uDuoHeight: { value: params.duoHeight },
     uDuoHeightLocal: { value: params.duoHeightLocal ? 1 : 0 },
     uTime: { value: 0 },
@@ -937,9 +1206,15 @@ function shaderUniforms(geo) {
     uFlowReach: { value: params.flowReach },
     uRimPower: { value: params.shRimPower },
     uRimIntensity: { value: params.shRimIntensity },
+    uRimBlend: { value: LINE_BLENDS[params.shRimBlend] ?? 0 },
     uWindAmp: { value: params.windAmplitude },
     uWindFreq: { value: params.windFrequency },
     uWindPhase: { value: params.windPhase },
+    uWindGrowth: { value: params.windGrowthBack },
+    uWindGrowthCurve: { value: params.windGrowthCurve },
+    uPeakSkirt: { value: params.peakEnable ? params.peakSkirt : 0 },
+    uPeakPos: { value: params.peakPos },
+    uPeakRadius: { value: params.peakRadius },
     uLen: { value: params.length },
     uTrailWidth: { value: params.trailWidth },
     uTrailSpill: { value: params.trailSpill },
@@ -952,6 +1227,13 @@ function shaderUniforms(geo) {
     uMaxY: { value: bb ? bb.max.y : 1 },
     uFogNear: { value: params.fogNear },
     uFogFar: { value: params.fogFar },
+    uFogHeight: { value: params.fogHeight },
+    uFogHeightBand: { value: params.fogHeightBand },
+    uFogHeightFade: { value: params.fogHeightFade ? 1 : 0 },
+    uValleyFog: { value: params.valleyFog },
+    uValleyColor: { value: new THREE.Color(params.valleyFogColor) },
+    uValleyTop: { value: params.valleyTop },
+    uValleyBottom: { value: params.valleyBottom },
     uSunEnable: { value: params.sunEnable ? 1 : 0 },
     uSunDir: { value: sunDir() },
     uSunColor: { value: new THREE.Color(params.sunColor) },
@@ -961,6 +1243,7 @@ function shaderUniforms(geo) {
     uWidth: { value: params.width },
     uShadowEnable: { value: params.shadowEnable ? 1 : 0 },
     uShadowHard: { value: params.shadowHard ? 1 : 0 },
+    uShadowDarken: { value: params.shadowDarken },
     uShadowStrength: { value: params.shadowStrength },
     uShadowDist: { value: params.shadowDist },
     uShadowSoft: { value: params.shadowSoft },
@@ -975,6 +1258,7 @@ function makeTerrainMaterial(geo) {
     vertexShader: TERRAIN_VERT,
     fragmentShader: TERRAIN_FRAG,
     wireframe: params.wireframe,
+    extensions: { derivatives: true },
   });
 }
 
@@ -992,9 +1276,21 @@ function updateShaderUniforms() {
   u.uLineFreq.value = params.shLineFreq;
   u.uLineWidth.value = params.shLineWidth;
   u.uLineIntensity.value = params.shLineIntensity;
+  u.uLineFromSurface.value = params.shLineFromSurface ? 1 : 0;
+  u.uLineBoost.value = params.shLineBoost;
+  u.uLineTrailMix.value = params.shLineTrailMix;
+  u.uLineFar.value = params.shLineFar;
+  u.uLineMap.value = STRIATION_MAPS[params.shLineMap] ?? 0;
   u.uLineBlend.value = LINE_BLENDS[params.shLineBlend] ?? 0;
   u.uFogNear.value = params.fogNear;
   u.uFogFar.value = params.fogFar;
+  u.uFogHeight.value = params.fogHeight;
+  u.uFogHeightBand.value = params.fogHeightBand;
+  u.uFogHeightFade.value = params.fogHeightFade ? 1 : 0;
+  u.uValleyFog.value = params.valleyFog;
+  u.uValleyColor.value.set(params.valleyFogColor);
+  u.uValleyTop.value = params.valleyTop;
+  u.uValleyBottom.value = params.valleyBottom;
   u.uBlendLo.value = 0.5 - params.shBlend;
   u.uBlendHi.value = 0.5 + params.shBlend;
   u.uBalance.value = params.shBalance;
@@ -1002,6 +1298,7 @@ function updateShaderUniforms() {
   u.uDuoNoiseType.value = NOISE_TYPES[params.duoNoiseType] ?? 0;
   u.uDuoNoiseScale.value = params.duoNoiseScale;
   u.uDuoNoiseWarp.value = params.duoNoiseWarp;
+  u.uDuoSeed.value = params.duoNoiseSeed;
   u.uDuoHeight.value = params.duoHeight;
   u.uDuoHeightLocal.value = params.duoHeightLocal ? 1 : 0;
   u.uFlowFog.value = params.flowFog ? 1 : 0;
@@ -1013,9 +1310,15 @@ function updateShaderUniforms() {
   u.uFlowReach.value = params.flowReach;
   u.uRimPower.value = params.shRimPower;
   u.uRimIntensity.value = params.shRimIntensity;
+  u.uRimBlend.value = LINE_BLENDS[params.shRimBlend] ?? 0;
   u.uWindAmp.value = params.windAmplitude;
   u.uWindFreq.value = params.windFrequency;
   u.uWindPhase.value = params.windPhase;
+  u.uWindGrowth.value = params.windGrowthBack;
+  u.uWindGrowthCurve.value = params.windGrowthCurve;
+  u.uPeakSkirt.value = params.peakEnable ? params.peakSkirt : 0;
+  u.uPeakPos.value = params.peakPos;
+  u.uPeakRadius.value = params.peakRadius;
   u.uLen.value = params.length;
   u.uTrailWidth.value = params.trailWidth;
   u.uTrailSpill.value = params.trailSpill;
@@ -1137,7 +1440,7 @@ function getCenterlinePoints(n = 400) {
   for (let i = 0; i <= n; i++) {
     const z = -params.length / 2 + (i / n) * params.length;
     const x = pathCenterX(z);
-    const y = floorYAt(z) + 0.6; // sit just above the floor
+    const y = floorYAt(z) + peakAt(x, z) + 0.6; // climb the mountain too
     pts.push(new THREE.Vector3(x, y, z));
   }
   return pts;
@@ -1583,23 +1886,7 @@ settingsInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const loaded = JSON.parse(reader.result);
-      let n = 0;
-      for (const k in loaded) { if (k in params) { params[k] = loaded[k]; n++; } }
-      gui.controllersRecursive().forEach((c) => c.updateDisplay());
-      // re-apply everything (terrain + every shader / post system)
-      noise = new SimplexNoise(params.seed);
-      buildTerrain();
-      applyToneMapping();
-      updatePost();
-      updateGrade();
-      updateFog();
-      updateSky();
-      updateSun();
-      updateLens();
-      updateFrame();
-      controls.enabled = !params.flyMode;
-      runT = 0;
+      const n = applyLoadedParams(JSON.parse(reader.result));
       setStatus(`loaded ${file.name} — applied ${n} settings`);
     } catch (err) {
       console.error(err);
@@ -1649,13 +1936,186 @@ function updateFrame() {
   frameLeft.style.width = side + 'px'; frameRight.style.width = side + 'px';
 }
 
+// ---- named camera views + browser-stored presets -------------------------
+const ui = { viewName: '', viewGo: '', presetName: '', presetLoad: '', folderName: '', folderLoad: '' };
+let viewGoCtrl = null, presetLoadCtrl = null, folderLoadCtrl = null;
+
+function captureView() {
+  return {
+    px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+    tx: controls.target.x, ty: controls.target.y, tz: controls.target.z,
+    focal: params.focalLength,
+  };
+}
+function saveView() {
+  const name = (ui.viewName || '').trim() || ('view ' + (Object.keys(params.cameraBookmarks).length + 1));
+  params.cameraBookmarks[name] = captureView();
+  ui.viewName = '';
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+  refreshViewDropdown();
+  setStatus('saved camera view "' + name + '"');
+}
+function goView(name) {
+  const v = params.cameraBookmarks[name];
+  if (!v) return;
+  params.flyMode = false; controls.enabled = true;
+  params.focalLength = v.focal; updateLens();
+  camera.position.set(v.px, v.py, v.pz);
+  controls.target.set(v.tx, v.ty, v.tz);
+  controls.update();
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+}
+function deleteView() {
+  const name = ui.viewGo;
+  if (name && params.cameraBookmarks[name]) {
+    delete params.cameraBookmarks[name];
+    refreshViewDropdown();
+    setStatus('deleted view "' + name + '"');
+  }
+}
+function refreshViewDropdown() {
+  if (viewGoCtrl) viewGoCtrl.destroy();
+  const names = Object.keys(params.cameraBookmarks);
+  viewGoCtrl = fView.add(ui, 'viewGo', names.length ? names : ['(none)']).name('go to view')
+    .onChange(v => { if (params.cameraBookmarks[v]) goView(v); });
+}
+
+const LS_INDEX = 'tg.presets';
+const lsIndex = () => { try { return JSON.parse(localStorage.getItem(LS_INDEX) || '[]'); } catch (e) { return []; } };
+function savePreset() {
+  const name = (ui.presetName || '').trim();
+  if (!name) { setStatus('enter a preset name first'); return; }
+  localStorage.setItem('tg.preset.' + name, JSON.stringify(params));
+  const idx = lsIndex(); if (!idx.includes(name)) idx.push(name);
+  localStorage.setItem(LS_INDEX, JSON.stringify(idx));
+  ui.presetName = '';
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+  refreshPresetDropdown();
+  setStatus('saved preset "' + name + '" in browser');
+}
+function loadPreset(name) {
+  const raw = localStorage.getItem('tg.preset.' + name);
+  if (!raw) return;
+  try { const n = applyLoadedParams(JSON.parse(raw)); setStatus('loaded preset "' + name + '" (' + n + ' settings)'); }
+  catch (e) { console.error(e); setStatus('could not load preset'); }
+}
+function deletePreset() {
+  const name = ui.presetLoad;
+  if (!name || name === '(none)') return;
+  localStorage.removeItem('tg.preset.' + name);
+  localStorage.setItem(LS_INDEX, JSON.stringify(lsIndex().filter(x => x !== name)));
+  refreshPresetDropdown();
+  setStatus('deleted preset "' + name + '"');
+}
+function refreshPresetDropdown() {
+  if (presetLoadCtrl) presetLoadCtrl.destroy();
+  const names = lsIndex();
+  presetLoadCtrl = fPresets.add(ui, 'presetLoad', names.length ? names : ['(none)']).name('load preset')
+    .onChange(v => { if (v && v !== '(none)') loadPreset(v); });
+}
+
+// ---- linked folder on disk (File System Access API, Chromium only) --------
+// Works the same on the live GitHub Pages site — files live on YOUR disk.
+let dirHandle = null;
+function idbReq(fn) {
+  return new Promise((res, rej) => {
+    const o = indexedDB.open('tg-fs', 1);
+    o.onupgradeneeded = () => o.result.createObjectStore('h');
+    o.onsuccess = () => { try { fn(o.result, res, rej); } catch (e) { rej(e); } };
+    o.onerror = () => rej(o.error);
+  });
+}
+const idbSet = (k, v) => idbReq((db, res, rej) => { const tx = db.transaction('h', 'readwrite'); tx.objectStore('h').put(v, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+const idbGet = (k) => idbReq((db, res, rej) => { const r = db.transaction('h', 'readonly').objectStore('h').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+async function fsPerm(handle, request, mode = 'readwrite') {
+  if (!handle) return false;
+  const opts = { mode };
+  if ((await handle.queryPermission(opts)) === 'granted') return true;
+  if (request && (await handle.requestPermission(opts)) === 'granted') return true;
+  return false;
+}
+async function linkFolder() {
+  if (!window.showDirectoryPicker) { setStatus('not supported here — use Chrome/Edge'); return; }
+  try {
+    dirHandle = await window.showDirectoryPicker({ id: 'tg-presets', mode: 'readwrite' });
+    await idbSet('dir', dirHandle);
+    await refreshFolderDropdown(true);
+    setStatus('linked folder "' + dirHandle.name + '"');
+  } catch (e) { /* user cancelled */ }
+}
+async function restoreFolder() {
+  try { const h = await idbGet('dir'); if (h) { dirHandle = h; await refreshFolderDropdown(false); } } catch (e) { /* ignore */ }
+}
+async function listFolderPresets(request) {
+  if (!dirHandle || !(await fsPerm(dirHandle, request, 'read'))) return null;
+  const names = [];
+  for await (const [name, entry] of dirHandle.entries()) {
+    if (entry.kind === 'file' && name.endsWith('.json')) names.push(name.replace(/\.json$/, ''));
+  }
+  return names.sort();
+}
+async function saveFolderPreset() {
+  if (!dirHandle) { setStatus('link a folder first'); return; }
+  const name = (ui.folderName || '').trim();
+  if (!name) { setStatus('enter a name first'); return; }
+  if (!(await fsPerm(dirHandle, true))) { setStatus('permission denied'); return; }
+  const fh = await dirHandle.getFileHandle(name + '.json', { create: true });
+  const w = await fh.createWritable(); await w.write(JSON.stringify(params, null, 2)); await w.close();
+  ui.folderName = '';
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+  await refreshFolderDropdown(false);
+  setStatus('saved "' + name + '.json" to folder');
+}
+async function loadFolderPreset(name) {
+  if (!dirHandle || !(await fsPerm(dirHandle, true, 'read'))) return;
+  const fh = await dirHandle.getFileHandle(name + '.json');
+  const txt = await (await fh.getFile()).text();
+  const n = applyLoadedParams(JSON.parse(txt));
+  setStatus('loaded "' + name + '" (' + n + ' settings)');
+}
+async function deleteFolderPreset() {
+  const name = ui.folderLoad;
+  if (!dirHandle || !name || name === '(none)') return;
+  if (!(await fsPerm(dirHandle, true))) return;
+  await dirHandle.removeEntry(name + '.json');
+  await refreshFolderDropdown(false);
+  setStatus('deleted "' + name + '.json"');
+}
+async function refreshFolderDropdown(request) {
+  const names = await listFolderPresets(request);
+  if (folderLoadCtrl) folderLoadCtrl.destroy();
+  let opts;
+  if (names === null) opts = dirHandle ? ['(reconnect ↻)'] : ['(no folder linked)'];
+  else opts = names.length ? names : ['(empty)'];
+  folderLoadCtrl = fFolder.add(ui, 'folderLoad', opts).name('load from folder')
+    .onChange(v => { if (v && !v.startsWith('(')) loadFolderPreset(v); });
+}
+
+// shared apply: merge params, refresh GUI, and re-run the whole pipeline
+function applyLoadedParams(loaded) {
+  let n = 0;
+  for (const k in loaded) { if (k in params) { params[k] = loaded[k]; n++; } }
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+  noise = new SimplexNoise(params.seed);
+  buildTerrain();
+  applyToneMapping(); updatePost(); updateGrade(); updateFog(); updateSky(); updateSun(); updateLens(); updateFrame();
+  refreshViewDropdown();
+  controls.enabled = !params.flyMode;
+  runT = 0;
+  return n;
+}
+
 const gui = new GUI({ title: 'Terrain' });
 
 const fGrid = gui.addFolder('Grid / size');
-fGrid.add(params, 'width', 40, 400, 1).onFinishChange(maybe);
+fGrid.add(params, 'width', 40, 1600, 1).onFinishChange(maybe);
 fGrid.add(params, 'length', 40, 3000, 1).onFinishChange(maybe);
-fGrid.add(params, 'segmentsX', 20, 600, 1).onFinishChange(maybe).name('resolution X');
+fGrid.add(params, 'segmentsX', 20, 1200, 1).onFinishChange(maybe).name('resolution X');
 fGrid.add(params, 'segmentsZ', 20, 3000, 1).onFinishChange(maybe).name('resolution Z');
+fGrid.add(params, 'edgeFalloff', 0, 1, 0.01).onFinishChange(maybe).name('side falloff');
+fGrid.add(params, 'edgeCurve', 0.5, 4, 0.1).onFinishChange(maybe).name('falloff curve');
+fGrid.add(params, 'edgeDrop', 0, 300, 1).onFinishChange(maybe).name('side drop');
 
 const fMtn = gui.addFolder('Mountains');
 fMtn.add(params, 'seed', 0, 99999, 1).onFinishChange(regen);
@@ -1671,6 +2131,20 @@ fMtn.add(params, 'smoothing', 0.5, 3, 0.05).onChange(maybe).name('hill roundness
 fMtn.add(params, 'growthFront', 0, 3, 0.05).onChange(maybe).name('height: front');
 fMtn.add(params, 'growthBack', 0, 6, 0.05).onChange(maybe).name('height: back');
 fMtn.add(params, 'growthCurve', 0.3, 4, 0.1).onChange(maybe).name('growth curve');
+const fPeak = fMtn.addFolder('Background mountain');
+fPeak.add(params, 'peakEnable').onChange(maybe).name('enable');
+fPeak.add(params, 'peakHeight', 0, 1200, 5).onChange(maybe).name('height');
+fPeak.add(params, 'peakRadius', 100, 2000, 10).onChange(maybe).name('reach (length)');
+fPeak.add(params, 'peakAspect', 0.2, 2, 0.05).onChange(maybe).name('width ratio');
+fPeak.add(params, 'peakPos', 0.5, 1.2, 0.01).onChange(maybe).name('position');
+fPeak.add(params, 'peakCurve', 1, 5, 0.1).onChange(maybe).name('summit sharpness');
+fPeak.add(params, 'peakRidge', 0, 1, 0.02).onChange(maybe).name('slope noise');
+fPeak.add(params, 'peakSkirt', -1.5, 1.5, 0.05).onChange(maybe).name('route around peak');
+const fDetail = fMtn.addFolder('Detail noise');
+fDetail.add(params, 'detailAmount', 0, 40, 0.5).onChange(maybe).name('amount');
+fDetail.add(params, 'detailScale', 0.01, 0.3, 0.005).onChange(maybe).name('scale (finer →)');
+fDetail.add(params, 'detailNoiseType', ['fbm', 'ridged', 'billow', 'cellular', 'cracks', 'turbulence']).onChange(maybe).name('noise type');
+fDetail.add(params, 'detailPeakBoost', 0, 6, 0.1).onChange(maybe).name('flank reach');
 
 const fPath = gui.addFolder('Path / valley');
 fPath.add(params, 'pathWidth', 2, 60, 0.5).onChange(maybe);
@@ -1688,6 +2162,8 @@ fPath.add(params, 'climbWaves', 0, 30, 1).onChange(maybe).name('up/down hills');
 fPath.add(params, 'windAmplitude', 0, 80, 1).onChange(maybe).name('wind amplitude');
 fPath.add(params, 'windFrequency', 0, 4, 0.05).onChange(maybe).name('wind S-curves');
 fPath.add(params, 'windPhase', 0, 6.28, 0.01).onChange(maybe).name('wind phase');
+fPath.add(params, 'windGrowthBack', 1, 8, 0.1).onChange(maybe).name('wind growth (back)');
+fPath.add(params, 'windGrowthCurve', 0.5, 4, 0.1).onChange(maybe).name('wind growth curve');
 
 const fSurf = gui.addFolder('Surface shader');
 fSurf.add(params, 'surfaceStyle', { 'duotone dunes': 'duotone', 'plain (vertex colour)': 'standard' })
@@ -1701,6 +2177,8 @@ fDuo.add(params, 'duotoneMode', Object.keys(DUO_MODES)).onChange(updateShaderUni
 fDuo.add(params, 'duoNoiseType', Object.keys(NOISE_TYPES)).onChange(updateShaderUniforms).name('noise type');
 fDuo.add(params, 'duoNoiseScale', 0.002, 0.1, 0.001).onChange(updateShaderUniforms).name('noise scale');
 fDuo.add(params, 'duoNoiseWarp', 0, 2, 0.02).onChange(updateShaderUniforms).name('noise warp');
+fDuo.add(params, 'duoNoiseSeed', 0, 999, 1).onChange(updateShaderUniforms).name('noise seed').listen();
+fDuo.add({ r: () => { params.duoNoiseSeed = (Math.random() * 999) | 0; updateShaderUniforms(); } }, 'r').name('🎲 random seed');
 fDuo.add(params, 'duoHeight', 0, 1, 0.01).onChange(updateShaderUniforms).name('height influence');
 fDuo.add(params, 'duoHeightLocal').onChange(updateShaderUniforms).name('height: local per-dune');
 fDuo.add(params, 'shLightAz', 0, 6.283, 0.01).onChange(updateShaderUniforms).name('light angle (facing)');
@@ -1713,10 +2191,15 @@ fTrail.add(params, 'trailWidth', 0.5, 12, 0.1).onChange(updateShaderUniforms).na
 fTrail.add(params, 'trailGlow', 0, 4, 0.05).onChange(updateShaderUniforms).name('intensity');
 fTrail.add(params, 'trailClear', 1, 8, 0.05).onChange(updateShaderUniforms).name('striation clearance');
 fSurf.addColor(params, 'shLineColor').onChange(updateShaderUniforms).name('striation tint');
-fSurf.add(params, 'shLineFreq', 10, 200, 1).onChange(updateShaderUniforms).name('striation density');
+fSurf.add(params, 'shLineMap', Object.keys(STRIATION_MAPS)).onChange(updateShaderUniforms).name('striation mapping');
+fSurf.add(params, 'shLineFreq', 10, 800, 1).onChange(updateShaderUniforms).name('striation density');
 fSurf.add(params, 'shLineWidth', 0.01, 0.3, 0.005).onChange(updateShaderUniforms).name('striation width');
 fSurf.add(params, 'shLineIntensity', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation strength');
 fSurf.add(params, 'shLineBlend', Object.keys(LINE_BLENDS)).onChange(updateShaderUniforms).name('striation blend');
+fSurf.add(params, 'shLineFromSurface').onChange(updateShaderUniforms).name('striation = surface colour');
+fSurf.add(params, 'shLineBoost', 0.5, 3, 0.05).onChange(updateShaderUniforms).name('striation brightness');
+fSurf.add(params, 'shLineTrailMix', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation→trail near path');
+fSurf.add(params, 'shLineFar', 0.15, 2, 0.05).onChange(updateShaderUniforms).name('far visibility (LOD)');
 const fFlow = fSurf.addFolder('Flow fog (animated)');
 fFlow.add(params, 'flowFog').onChange(updateShaderUniforms).name('enable');
 fFlow.addColor(params, 'flowColor').onChange(updateShaderUniforms).name('colour');
@@ -1730,11 +2213,20 @@ const fRim = fSurf.addFolder('Fresnel rim light');
 fRim.addColor(params, 'shRimColor').onChange(updateShaderUniforms).name('rim colour');
 fRim.add(params, 'shRimPower', 0.5, 8, 0.1).onChange(updateShaderUniforms).name('rim tightness');
 fRim.add(params, 'shRimIntensity', 0, 2, 0.02).onChange(updateShaderUniforms).name('rim strength');
+fRim.add(params, 'shRimBlend', Object.keys(LINE_BLENDS)).onChange(updateShaderUniforms).name('blend mode');
 
 const fFog = gui.addFolder('Fog').close();
 fFog.addColor(params, 'fogColor').onChange(updateFog).name('colour');
 fFog.add(params, 'fogNear', 0, 2000, 5).onChange(updateFog).name('near');
 fFog.add(params, 'fogFar', 100, 4000, 10).onChange(updateFog).name('far');
+fFog.add(params, 'fogHeightFade').onChange(updateFog).name('peak above fog');
+fFog.add(params, 'fogHeight', -100, 600, 5).onChange(updateFog).name('clear above height');
+fFog.add(params, 'fogHeightBand', 10, 800, 5).onChange(updateFog).name('clearing band');
+const fValley = fFog.addFolder('Valley fog (in troughs)');
+fValley.add(params, 'valleyFog', 0, 1, 0.01).onChange(updateFog).name('strength');
+fValley.addColor(params, 'valleyFogColor').onChange(updateFog).name('colour');
+fValley.add(params, 'valleyBottom', 0, 1, 0.01).onChange(updateFog).name('fogged below');
+fValley.add(params, 'valleyTop', 0, 1, 0.01).onChange(updateFog).name('clear above');
 
 const fSun = gui.addFolder('Sun');
 fSun.add(params, 'sunEnable').onChange(updateSun).name('enable');
@@ -1752,6 +2244,7 @@ const fShadow = fSun.addFolder('Shadows');
 fShadow.add(params, 'shadowEnable').onChange(updateSun).name('enable');
 fShadow.add(params, 'shadowHard').onChange(updateSun).name('hard edges');
 fShadow.add(params, 'shadowStrength', 0, 1, 0.01).onChange(updateSun).name('strength');
+fShadow.add(params, 'shadowDarken', 0, 1, 0.01).onChange(updateSun).name('darkness');
 fShadow.add(params, 'shadowDist', 20, 400, 5).onChange(updateSun).name('reach');
 fShadow.add(params, 'shadowSoft', 0.02, 1, 0.01).onChange(updateSun).name('softness');
 fShadow.add(params, 'shadowBias', 0, 4, 0.05).onChange(updateSun).name('bias');
@@ -1764,12 +2257,16 @@ fSky.add(params, 'skyHorizonY', 0.02, 1.0, 0.01).onChange(updateSky).name('horiz
 fSky.add(params, 'skyMidY', 0.1, 1.5, 0.01).onChange(updateSky).name('mid height');
 fSky.add(params, 'skyNoise', 0, 0.3, 0.005).onChange(updateSky).name('gradient noise');
 fSky.add(params, 'skyNoiseScale', 0.5, 12, 0.1).onChange(updateSky).name('noise scale');
+const fBgGlow = fSky.addFolder('Background glow');
+fBgGlow.add(params, 'bgGlow', 0, 3, 0.05).onChange(updateSky).name('strength');
+fBgGlow.addColor(params, 'bgGlowColor').onChange(updateSky).name('colour');
+fBgGlow.add(params, 'bgGlowDiffusion', 0.01, 2, 0.01).onChange(updateSky).name('diffusion');
 const fCloud = fSky.addFolder('Clouds');
 fCloud.add(params, 'clouds').onChange(updateSky).name('enable');
 fCloud.addColor(params, 'cloudColor').onChange(updateSky).name('colour');
 fCloud.add(params, 'cloudCoverage', 0, 1, 0.01).onChange(updateSky).name('coverage');
 fCloud.add(params, 'cloudDensity', 0, 1, 0.01).onChange(updateSky).name('density');
-fCloud.add(params, 'cloudScale', 0.2, 5, 0.05).onChange(updateSky).name('scale');
+fCloud.add(params, 'cloudScale', 0.05, 5, 0.01).onChange(updateSky).name('scale');
 fCloud.add(params, 'cloudSoftness', 0.02, 0.8, 0.01).onChange(updateSky).name('softness');
 fCloud.add(params, 'cloudSpeed', 0, 5, 0.05).onChange(updateSky).name('drift speed');
 fCloud.add(params, 'cloudHeight', 0, 1, 0.01).onChange(updateSky).name('pattern seed');
@@ -1820,11 +2317,18 @@ fCam.add(params, 'focalLength', 10, 300, 1).onChange(updateLens).name('focal len
 fCam.add(params, 'showRunner').name('show runner');
 fCam.add({ restart: () => { runT = 0; } }, 'restart').name('⏮ restart run');
 
+const fView = gui.addFolder('Camera views');
+fView.add(ui, 'viewName').name('name');
+fView.add({ s: saveView }, 's').name('＋ save current view');
+fView.add({ d: deleteView }, 'd').name('🗑 delete selected');
+refreshViewDropdown();
+
 const fFrame = gui.addFolder('Frame / ratio');
 fFrame.add(params, 'frameRatio', Object.keys(FRAME_RATIOS)).onChange(updateFrame).name('aspect ratio');
 fFrame.add(params, 'frameOpacity', 0, 1, 0.01).onChange(updateFrame).name('bar opacity');
 
 const fLook = gui.addFolder('Display');
+fLook.add(params, 'showFps').name('show FPS');
 fLook.add(params, 'showPath').onChange(buildPathLine).name('show centerline');
 fLook.add(params, 'wireframe').onChange(() => { if (terrain) terrain.material.wireframe = params.wireframe; });
 fLook.add(params, 'autoUpdate').name('auto-rebuild');
@@ -1853,6 +2357,20 @@ fTex.add(params, 'texFlipV').name('flip V (C4D default)');
 const fSet = gui.addFolder('Settings / presets');
 fSet.add({ save: exportSettings }, 'save').name('⬇ Export settings (.json)');
 fSet.add({ load: importSettings }, 'load').name('⬆ Import settings (.json)');
+const fPresets = fSet.addFolder('Browser presets (no download)');
+fPresets.add(ui, 'presetName').name('name');
+fPresets.add({ s: savePreset }, 's').name('＋ save to browser');
+fPresets.add({ d: deletePreset }, 'd').name('🗑 delete selected');
+refreshPresetDropdown();
+
+const fFolder = fSet.addFolder('Linked folder (files on disk)');
+fFolder.add({ link: linkFolder }, 'link').name('🔗 link a folder');
+fFolder.add({ r: () => refreshFolderDropdown(true) }, 'r').name('↻ reconnect / refresh');
+fFolder.add(ui, 'folderName').name('name');
+fFolder.add({ s: saveFolderPreset }, 's').name('＋ save .json to folder');
+fFolder.add({ d: deleteFolderPreset }, 'd').name('🗑 delete selected');
+refreshFolderDropdown(false);
+restoreFolder();
 
 /* ------------------------------------------------------------------ */
 /*  Loop                                                               */
@@ -1871,6 +2389,11 @@ controls.enabled = !params.flyMode;
 const hud = document.getElementById('hud');
 const pad = (n) => String(n).padStart(2, '0');
 
+const fpsEl = document.createElement('div');
+fpsEl.style.cssText = 'position:fixed;top:10px;left:12px;z-index:10;color:#9bffc4;font:12px ui-monospace,SFMono-Regular,monospace;background:rgba(10,12,20,.5);padding:3px 8px;border-radius:6px;pointer-events:none;';
+document.body.appendChild(fpsEl);
+let fpsAccum = 0, fpsFrames = 0;
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -1887,8 +2410,22 @@ let flyTime = 0;
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, clock.getDelta());
+
+  fpsEl.style.display = params.showFps ? 'block' : 'none';
+  if (params.showFps) {
+    fpsAccum += dt; fpsFrames++;
+    if (fpsAccum >= 0.5) { fpsEl.textContent = (fpsFrames / fpsAccum).toFixed(0) + ' fps'; fpsAccum = 0; fpsFrames = 0; }
+  }
+
   skyDome.position.copy(camera.position);
   skyMat.uniforms.uTime.value += dt;
+  { // aim the background glow at the mountain summit
+    const L = params.length;
+    const cz = Math.min(L * 0.5, -L * 0.5 + params.peakPos * L);
+    const sx = pathCenterX(cz, false);
+    const sy = floorYAt(cz) + (params.peakEnable ? params.peakHeight : 0);
+    skyMat.uniforms.uBgGlowDir.value.set(sx, sy, cz).sub(camera.position).normalize();
+  }
   if (terrain && terrain.material.isShaderMaterial) terrain.material.uniforms.uTime.value += dt;
   if (params.grain > 0) gradePass.uniforms.uTime.value = (gradePass.uniforms.uTime.value + dt) % 100;
 
@@ -1918,6 +2455,14 @@ renderer.setAnimationLoop(() => {
   if (params.post) composer.render();
   else renderer.render(scene, camera);
 });
+
+// Load the committed default parameters (parameters.json) and apply them as the
+// startup defaults. Works on the live site too; the baked-in defaults are the
+// fallback when the file isn't reachable (e.g. opened via file://).
+fetch('./parameters.json')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((d) => { if (d) { applyLoadedParams(d); setStatus('loaded parameters.json defaults'); } })
+  .catch(() => {});
 </script>
 </body>
 </html>
