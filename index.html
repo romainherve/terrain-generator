@@ -930,7 +930,7 @@ const standardMaterial = () => new THREE.MeshStandardMaterial({
 
 const LINE_BLENDS = { add: 0, multiply: 1, screen: 2, overlay: 3, normal: 4, 'color-dodge': 5, lighten: 6, 'soft-light': 7, glow: 8 };
 const DUO_MODES = { facing: 0, noise: 1, height: 2 };
-const STRIATION_MAPS = { height: 0, lengthwise: 1, across: 2, 'from path': 3, radial: 4, angular: 5, flow: 6 };
+const STRIATION_MAPS = { height: 0, lengthwise: 1, across: 2, 'from path': 3, radial: 4, angular: 5, flow: 6, 'path-parallel': 7 };
 const NOISE_TYPES = { fbm: 0, ridged: 1, billow: 2, cellular: 3, cracks: 4, marble: 5, bands: 6, turbulence: 7 };
 
 const TERRAIN_VERT = /* glsl */`
@@ -1132,6 +1132,7 @@ const TERRAIN_FRAG = /* glsl */`
       fp += (fw - 0.5) * uLineFlowWarp;
       lc = fbm3(vec3(fp, 1.7));
     }
+    else if (uLineMap == 7) lc = sx / max(1.0, uWidth);                 // parallel to the winding path
     else lc = elev;                                                     // height (topographic)
     // constant-width contour lines with mip-style LOD so they stay resolvable
     // (visible) into the distance instead of washing out to gray on the far peak

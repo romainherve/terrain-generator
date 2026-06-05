@@ -83,7 +83,7 @@
   "shLineFreq": 800,
   "shLineWidth": 0.055,
   "shLineIntensity": 1,
-  "shLineMap": "lengthwise",
+  "shLineMap": "path-parallel",
   "shLineBlend": "normal",
   "shLineFromSurface": true,
   "shLineBoost": 2.1,
