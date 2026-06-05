@@ -2,7 +2,7 @@
   "width": 1302,
   "length": 1908,
   "segmentsX": 705,
-  "segmentsZ": 1863,
+  "segmentsZ": 2742,
   "edgeFalloff": 0.52,
   "edgeCurve": 1.9,
   "edgeDrop": 82,
@@ -212,5 +212,9 @@
       "focal": 30
     }
   },
-  "defaultView": "Keyvisual"
+  "defaultView": "Keyvisual",
+  "backExtend": 900,
+  "backFalloff": 0.28,
+  "backCurve": 1.5,
+  "backDrop": 40
 }

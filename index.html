@@ -138,6 +138,10 @@ const params = {
   edgeFalloff: 0.45,  // fraction of the half-width over which relief tapers at the sides
   edgeCurve: 1.6,     // shape of that taper
   edgeDrop: 0,        // how much the ground also sinks toward the left/right edges
+  backExtend: 0,      // extra terrain added behind the peak (the mountain's far side + bg hills)
+  backFalloff: 0.3,   // fraction of the length over which the far edge tapers into the horizon
+  backCurve: 1.6,
+  backDrop: 0,        // how much the ground sinks toward the far edge
   // hills — tuned toward soft, billowing dunes (reference relief)
   seed: 1337,
   mountainHeight: 34,
@@ -808,9 +812,10 @@ function peakAt(x, z) {
 function floorYAt(z) {
   const L = params.length;
   const u = (z + L / 2) / L;
+  const ue = Math.min(1, Math.max(0, u)); // clamp so the back extension holds the end level
   return params.floorHeight
     + params.pathSlope * smoothstep(0, 1, u)
-    + (params.levelStart + (params.levelEnd - params.levelStart) * levelEase(u)) // base level ramp
+    + (params.levelStart + (params.levelEnd - params.levelStart) * levelEase(ue)) // base level ramp
     + altitudeProfile(u, L);
 }
 
@@ -888,9 +893,15 @@ function sample(x, z) {
   const halfW = params.width * 0.5;
   const swRaw = 1 - smoothstep(halfW * (1 - params.edgeFalloff), halfW, Math.abs(x));
   const sw = Math.pow(swRaw, params.edgeCurve);
+  // back falloff: relief/altitude taper toward the far edge to shape the horizon
+  const totalLen = params.length + params.backExtend;
+  const bu = (z + params.length / 2) / totalLen; // 0 front .. 1 far edge
+  const bwRaw = 1 - smoothstep(1 - params.backFalloff, 1.0, bu);
+  const bw = Math.pow(bwRaw, params.backCurve);
+  const w = sw * bw; // combined relief/peak weight
   const groundNoise = (noise.noise2D(x * 0.08, z * 0.08)) * params.floorNoise;
   const reliefAbove = groundNoise * (1 - valley) + mountain * valley;
-  const yDunes = floorY + reliefAbove * sw;
+  const yDunes = floorY + reliefAbove * w;
   // local height: 0 at the valley floor -> 1 at a full dune peak (excludes the big mountain)
   const denom = params.mountainHeight * Math.max(0.0001, growth);
   const relHeight = Math.min(1, Math.max(0, (reliefAbove * sw) / denom));
@@ -900,9 +911,9 @@ function sample(x, z) {
   if (params.detailAmount > 0 && params.peakHeight > 0) {
     const peakN = Math.min(1, peakV / params.peakHeight);
     const mask = Math.min(1, peakN * (1 + params.detailPeakBoost)); // reach down the flanks
-    detail = (detailNoise(x, z) - 0.5) * params.detailAmount * valley * sw * mask;
+    detail = (detailNoise(x, z) - 0.5) * params.detailAmount * valley * w * mask;
   }
-  const y = yDunes + peakV * sw - (1 - swRaw) * params.edgeDrop + detail;
+  const y = yDunes + peakV * w - (1 - swRaw) * params.edgeDrop - (1 - bwRaw) * params.backDrop + detail;
   return { y, valley, relHeight };
 }
 
@@ -953,7 +964,7 @@ const TERRAIN_FRAG = /* glsl */`
   uniform float uSunEnable, uSunIntensity, uAmbient;
   uniform vec3 uSunDir, uSunColor;
   uniform sampler2D uHeightMap;
-  uniform float uShadowEnable, uShadowStrength, uShadowDist, uShadowSoft, uShadowBias, uWidth, uShadowHard, uShadowDarken;
+  uniform float uShadowEnable, uShadowStrength, uShadowDist, uShadowSoft, uShadowBias, uWidth, uShadowHard, uShadowDarken, uZSpan;
   #define SHADOW_STEPS 48
   // heightfield self-shadow: march toward the sun, sampling the baked heights
   float shadowFactor(vec3 wp, vec3 sdir) {
@@ -964,7 +975,7 @@ const TERRAIN_FRAG = /* glsl */`
     for (int i = 0; i < SHADOW_STEPS; i++) {
       t += stepLen;
       vec3 p = wp + sdir * t;
-      vec2 uv = vec2((p.x + uWidth * 0.5) / uWidth, (p.z + uLen * 0.5) / uLen);
+      vec2 uv = vec2((p.x + uWidth * 0.5) / uWidth, (p.z + uLen * 0.5) / uZSpan);
       if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
       float h = texture2D(uHeightMap, uv).r;
       float clear = p.y - h;                       // >0 lit, <0 below terrain
@@ -1217,6 +1228,7 @@ function shaderUniforms(geo) {
     uPeakPos: { value: params.peakPos },
     uPeakRadius: { value: params.peakRadius },
     uLen: { value: params.length },
+    uZSpan: { value: params.length + params.backExtend },
     uTrailWidth: { value: params.trailWidth },
     uTrailSpill: { value: params.trailSpill },
     uTrailGlow: { value: params.trailGlow },
@@ -1321,6 +1333,7 @@ function updateShaderUniforms() {
   u.uPeakPos.value = params.peakPos;
   u.uPeakRadius.value = params.peakRadius;
   u.uLen.value = params.length;
+  u.uZSpan.value = params.length + params.backExtend;
   u.uTrailWidth.value = params.trailWidth;
   u.uTrailSpill.value = params.trailSpill;
   u.uTrailGlow.value = params.trailGlow;
@@ -1359,10 +1372,11 @@ function buildTerrain() {
   const heights = new Float32Array(nx * nz);  // world Y per vertex (shadow heightmap)
   const rels = new Float32Array(nx * nz);     // local relative height (0 floor .. 1 peak)
 
+  const totalLen = length + params.backExtend; // includes the back extension
   const col = new THREE.Color();
   let k = 0, t = 0, vi = 0;
   for (let j = 0; j < nz; j++) {
-    const z = -length / 2 + (j / segmentsZ) * length;
+    const z = -length / 2 + (j / segmentsZ) * totalLen;
     for (let i = 0; i < nx; i++) {
       const x = -width / 2 + (i / segmentsX) * width;
       const { y, valley, relHeight } = sample(x, z);
@@ -2117,6 +2131,10 @@ fGrid.add(params, 'segmentsZ', 20, 3000, 1).onFinishChange(maybe).name('resoluti
 fGrid.add(params, 'edgeFalloff', 0, 1, 0.01).onFinishChange(maybe).name('side falloff');
 fGrid.add(params, 'edgeCurve', 0.5, 4, 0.1).onFinishChange(maybe).name('falloff curve');
 fGrid.add(params, 'edgeDrop', 0, 300, 1).onFinishChange(maybe).name('side drop');
+fGrid.add(params, 'backExtend', 0, 3000, 10).onFinishChange(maybe).name('back extension');
+fGrid.add(params, 'backFalloff', 0, 1, 0.01).onFinishChange(maybe).name('back falloff');
+fGrid.add(params, 'backCurve', 0.5, 4, 0.1).onFinishChange(maybe).name('back curve');
+fGrid.add(params, 'backDrop', 0, 400, 1).onFinishChange(maybe).name('back drop');
 
 const fMtn = gui.addFolder('Mountains');
 fMtn.add(params, 'seed', 0, 99999, 1).onFinishChange(regen);
