@@ -216,5 +216,6 @@
   "backExtend": 900,
   "backFalloff": 0.28,
   "backCurve": 1.5,
-  "backDrop": 40
+  "backDrop": 40,
+  "shLineEmissive": 0.2
 }

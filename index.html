@@ -235,6 +235,9 @@ const params = {
   shLineFromSurface: true,  // striation colour = local red/blue (vs the fixed tint)
   shLineBoost: 1.4,         // brightness of the surface-derived line colour
   shLineTrailMix: 1.0,      // how strongly lines near the trail take the trail colour
+  shLineEmissive: 0.2,      // extra glow on the red (warm) striations only
+  shLineFlowScale: 0.02,    // field scale for the 'flow' striation mode
+  shLineFlowWarp: 4.0,      // swirl strength for the 'flow' striation mode
   shLineFar: 0.5,           // distance LOD target (lower = keep lines visible further)
   shLightAz: 0.5,            // light azimuth (radians) — sets which faces go warm
   shBlend: 0.42,            // red<->blue blend softness (0 hard, 0.5 full gradient)
@@ -927,7 +930,7 @@ const standardMaterial = () => new THREE.MeshStandardMaterial({
 
 const LINE_BLENDS = { add: 0, multiply: 1, screen: 2, overlay: 3, normal: 4, 'color-dodge': 5, lighten: 6, 'soft-light': 7, glow: 8 };
 const DUO_MODES = { facing: 0, noise: 1, height: 2 };
-const STRIATION_MAPS = { height: 0, lengthwise: 1, across: 2, 'from path': 3, radial: 4, angular: 5 };
+const STRIATION_MAPS = { height: 0, lengthwise: 1, across: 2, 'from path': 3, radial: 4, angular: 5, flow: 6 };
 const NOISE_TYPES = { fbm: 0, ridged: 1, billow: 2, cellular: 3, cracks: 4, marble: 5, bands: 6, turbulence: 7 };
 
 const TERRAIN_VERT = /* glsl */`
@@ -951,7 +954,7 @@ const TERRAIN_VERT = /* glsl */`
 const TERRAIN_FRAG = /* glsl */`
   precision highp float;
   uniform vec3 uWarm, uCool, uPath, uLineColor, uHaze, uRimColor;
-  uniform float uLineFreq, uLineWidth, uLineIntensity, uLineFromSurface, uLineBoost, uLineTrailMix, uLineFar;
+  uniform float uLineFreq, uLineWidth, uLineIntensity, uLineFromSurface, uLineBoost, uLineTrailMix, uLineFar, uLineEmissive, uLineFlowScale, uLineFlowWarp;
   uniform int uLineBlend, uRimBlend, uLineMap;
   uniform float uMinY, uMaxY, uFogNear, uFogFar, uFogHeight, uFogHeightBand, uFogHeightFade;
   uniform float uValleyFog, uValleyTop, uValleyBottom;
@@ -1123,6 +1126,12 @@ const TERRAIN_FRAG = /* glsl */`
     else if (uLineMap == 3) lc = abs(sx) / max(1.0, uWidth * 0.5);      // bands following the path
     else if (uLineMap == 4) lc = length(vWorldPos.xz) / max(1.0, uLen); // radial from origin
     else if (uLineMap == 5) lc = atan(vWorldPos.x, vWorldPos.z) / 6.2831853 + 0.5; // angular
+    else if (uLineMap == 6) {                                           // flow (streamline-like)
+      vec2 fp = vWorldPos.xz * uLineFlowScale;
+      vec2 fw = vec2(fbm3(vec3(fp, 3.1)), fbm3(vec3(fp + 7.7, 3.1)));
+      fp += (fw - 0.5) * uLineFlowWarp;
+      lc = fbm3(vec3(fp, 1.7));
+    }
     else lc = elev;                                                     // height (topographic)
     // constant-width contour lines with mip-style LOD so they stay resolvable
     // (visible) into the distance instead of washing out to gray on the far peak
@@ -1137,6 +1146,8 @@ const TERRAIN_FRAG = /* glsl */`
       lineCol = base * uLineBoost;
       lineCol = mix(lineCol, uPath, clamp(env * uLineTrailMix, 0.0, 1.0));
     }
+    // emissive boost only on the red (warm) striations — t is 0 (blue) .. 1 (red)
+    lineCol *= 1.0 + uLineEmissive * t;
     base = blendMode(base, lineCol, la, uLineBlend);
 
     // fresnel rim light on grazing edges (bright dune silhouettes)
@@ -1196,6 +1207,9 @@ function shaderUniforms(geo) {
     uLineBoost: { value: params.shLineBoost },
     uLineTrailMix: { value: params.shLineTrailMix },
     uLineFar: { value: params.shLineFar },
+    uLineEmissive: { value: params.shLineEmissive },
+    uLineFlowScale: { value: params.shLineFlowScale },
+    uLineFlowWarp: { value: params.shLineFlowWarp },
     uLineMap: { value: STRIATION_MAPS[params.shLineMap] ?? 0 },
     uLineBlend: { value: LINE_BLENDS[params.shLineBlend] ?? 0 },
     uBlendLo: { value: 0.5 - params.shBlend },
@@ -1293,6 +1307,9 @@ function updateShaderUniforms() {
   u.uLineBoost.value = params.shLineBoost;
   u.uLineTrailMix.value = params.shLineTrailMix;
   u.uLineFar.value = params.shLineFar;
+  u.uLineEmissive.value = params.shLineEmissive;
+  u.uLineFlowScale.value = params.shLineFlowScale;
+  u.uLineFlowWarp.value = params.shLineFlowWarp;
   u.uLineMap.value = STRIATION_MAPS[params.shLineMap] ?? 0;
   u.uLineBlend.value = LINE_BLENDS[params.shLineBlend] ?? 0;
   u.uFogNear.value = params.fogNear;
@@ -2211,6 +2228,8 @@ fTrail.add(params, 'trailGlow', 0, 4, 0.05).onChange(updateShaderUniforms).name(
 fTrail.add(params, 'trailClear', 1, 8, 0.05).onChange(updateShaderUniforms).name('striation clearance');
 fSurf.addColor(params, 'shLineColor').onChange(updateShaderUniforms).name('striation tint');
 fSurf.add(params, 'shLineMap', Object.keys(STRIATION_MAPS)).onChange(updateShaderUniforms).name('striation mapping');
+fSurf.add(params, 'shLineFlowScale', 0.002, 0.1, 0.001).onChange(updateShaderUniforms).name('flow scale');
+fSurf.add(params, 'shLineFlowWarp', 0, 12, 0.1).onChange(updateShaderUniforms).name('flow swirl');
 fSurf.add(params, 'shLineFreq', 10, 800, 1).onChange(updateShaderUniforms).name('striation density');
 fSurf.add(params, 'shLineWidth', 0.01, 0.3, 0.005).onChange(updateShaderUniforms).name('striation width');
 fSurf.add(params, 'shLineIntensity', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation strength');
@@ -2218,6 +2237,7 @@ fSurf.add(params, 'shLineBlend', Object.keys(LINE_BLENDS)).onChange(updateShader
 fSurf.add(params, 'shLineFromSurface').onChange(updateShaderUniforms).name('striation = surface colour');
 fSurf.add(params, 'shLineBoost', 0.5, 3, 0.05).onChange(updateShaderUniforms).name('striation brightness');
 fSurf.add(params, 'shLineTrailMix', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation→trail near path');
+fSurf.add(params, 'shLineEmissive', 0, 4, 0.05).onChange(updateShaderUniforms).name('red striation glow');
 fSurf.add(params, 'shLineFar', 0.15, 2, 0.05).onChange(updateShaderUniforms).name('far visibility (LOD)');
 const fFlow = fSurf.addFolder('Flow fog (animated)');
 fFlow.add(params, 'flowFog').onChange(updateShaderUniforms).name('enable');
