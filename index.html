@@ -342,6 +342,7 @@ const params = {
   autoUpdate: true,
   // named camera views { name: {px,py,pz, tx,ty,tz, focal} } — saved with the JSON
   cameraBookmarks: {},
+  defaultView: '', // camera view to jump to on load (if it exists)
 };
 
 // Default scene preset — baked from "Latest - parameters.json"
@@ -2461,7 +2462,12 @@ renderer.setAnimationLoop(() => {
 // fallback when the file isn't reachable (e.g. opened via file://).
 fetch('./parameters.json')
   .then((r) => (r.ok ? r.json() : null))
-  .then((d) => { if (d) { applyLoadedParams(d); setStatus('loaded parameters.json defaults'); } })
+  .then((d) => {
+    if (!d) return;
+    applyLoadedParams(d);
+    if (params.defaultView && params.cameraBookmarks[params.defaultView]) goView(params.defaultView);
+    setStatus('loaded parameters.json defaults');
+  })
   .catch(() => {});
 </script>
 </body>
