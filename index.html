@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Valley Terrain Generator</title>
+<title>Martell</title>
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; font-family: system-ui, sans-serif; }
@@ -15,6 +15,14 @@
     pointer-events: none; max-width: 340px;
   }
   #info b { color: #ffd089; }
+  #toolbar { margin-top: 8px; display: flex; gap: 6px; pointer-events: auto; }
+  #toolbar button {
+    pointer-events: auto; cursor: pointer; font: inherit; font-size: 11px;
+    color: #cdd3e0; background: rgba(40,46,66,.85); border: 1px solid rgba(255,255,255,.12);
+    padding: 4px 10px; border-radius: 6px;
+  }
+  #toolbar button:hover { background: rgba(60,68,96,.9); }
+  #toolbar button.on { color: #0a0c14; background: #ffd089; border-color: #ffd089; }
   #status {
     position: fixed; right: 12px; bottom: 12px; z-index: 10;
     color: #9aa3b5; font-size: 12px; background: rgba(10,12,20,.55);
@@ -32,10 +40,12 @@
 <body>
 <div id="app"></div>
 <div id="info">
-  <b>Valley Terrain Generator</b><br/>
-  Drag to orbit · scroll to zoom · right-drag to pan.<br/>
-  Tweak the panel, then <b>Export GLB / OBJ</b> for your 3D software.<br/>
-  <b>Export Path JSON</b> gives the centerline points to drive your runner.
+  <b>MARTELL</b> — drag to orbit · scroll to zoom<br/>
+  Press <b>S</b> to show / hide the controls.
+  <div id="toolbar">
+    <button id="btnCam" title="Cycle saved camera views">📷 Camera</button>
+    <button id="btnRun" title="Toggle runner / fly-through mode">🏃 Runner</button>
+  </div>
 </div>
 <div id="status">ready</div>
 <div id="hud">DISTANCE <b>0 M</b> &nbsp;·&nbsp; TIME <b>00:00</b></div>
@@ -2496,6 +2506,36 @@ renderer.setAnimationLoop(() => {
   else renderer.render(scene, camera);
 });
 
+// hide the control panel by default; toggle with the S key
+gui.hide();
+let guiVisible = false;
+addEventListener('keydown', (e) => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // don't steal typing
+  if (e.key && e.key.toLowerCase() === 's') { guiVisible = !guiVisible; guiVisible ? gui.show() : gui.hide(); }
+});
+
+// bottom-left quick buttons: cycle saved cameras, toggle runner/fly mode
+const btnCam = document.getElementById('btnCam');
+const btnRun = document.getElementById('btnRun');
+let camIndex = -1;
+btnCam.addEventListener('click', () => {
+  const names = Object.keys(params.cameraBookmarks);
+  if (!names.length) { setStatus('no saved camera views'); return; }
+  camIndex = (camIndex + 1) % names.length;
+  goView(names[camIndex]);
+  setStatus('view: ' + names[camIndex]);
+});
+function syncRunBtn() { btnRun.classList.toggle('on', !!params.flyMode); }
+btnRun.addEventListener('click', () => {
+  params.flyMode = !params.flyMode;
+  controls.enabled = !params.flyMode;
+  if (!params.flyMode) controls.target.set(0, 20, 0);
+  gui.controllersRecursive().forEach((c) => c.updateDisplay());
+  syncRunBtn();
+});
+syncRunBtn();
+
 // Load the committed default parameters (parameters.json) and apply them as the
 // startup defaults. Works on the live site too; the baked-in defaults are the
 // fallback when the file isn't reachable (e.g. opened via file://).
@@ -2504,7 +2544,11 @@ fetch('./parameters.json')
   .then((d) => {
     if (!d) return;
     applyLoadedParams(d);
-    if (params.defaultView && params.cameraBookmarks[params.defaultView]) goView(params.defaultView);
+    if (params.defaultView && params.cameraBookmarks[params.defaultView]) {
+      goView(params.defaultView);
+      camIndex = Object.keys(params.cameraBookmarks).indexOf(params.defaultView);
+    }
+    syncRunBtn();
     setStatus('loaded parameters.json defaults');
   })
   .catch(() => {});
