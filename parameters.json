@@ -26,10 +26,10 @@
   "peakCurve": 2.6,
   "peakRidge": 0.26,
   "peakSkirt": -0.2,
-  "detailAmount": 15,
+  "detailAmount": 13.5,
   "detailScale": 0.01,
   "detailRidged": true,
-  "detailPeakBoost": 1.7,
+  "detailPeakBoost": 3.7,
   "pathWidth": 5.5,
   "wallWidth": 27,
   "wallCurve": 1.2,
@@ -217,5 +217,7 @@
   "backFalloff": 0.28,
   "backCurve": 1.5,
   "backDrop": 40,
-  "shLineEmissive": 0.2
+  "shLineEmissive": 0.2,
+  "detailZoom": 2.5,
+  "detailNoiseType": "ridged"
 }
