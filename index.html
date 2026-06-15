@@ -301,6 +301,8 @@ const params = {
   trailSpacing: 2.6,    // distance between the individual glowing lines
   trailLineWidth: 0.22, // sharpness of each line (fraction of spacing)
   trailClear: 1.6,      // striation clear-zone width vs the bundle spread (>1 = wider)
+  trailStyle: 'bundle', // 'bundle' = filled glow, 'edges' = two guiding lines (dark middle)
+  trailGap: 4.0,        // distance of each edge line from the centre (edges style)
   // animated flow fog (drifting luminous wisps along the path)
   flowFog: true,
   flowColor: '#cfe0ff',
@@ -980,7 +982,7 @@ const TERRAIN_FRAG = /* glsl */`
   uniform float uBlendLo, uBlendHi, uBalance, uRimPower, uRimIntensity;
   uniform float uWindAmp, uWindFreq, uWindPhase, uLen, uWindGrowth, uWindGrowthCurve;
   uniform float uPeakSkirt, uPeakPos, uPeakRadius;
-  uniform float uTrailWidth, uTrailSpill, uTrailGlow, uTrailSpacing, uTrailLineWidth, uTrailClear;
+  uniform float uTrailWidth, uTrailSpill, uTrailGlow, uTrailSpacing, uTrailLineWidth, uTrailClear, uTrailStyle, uTrailGap;
   uniform vec3 uLightDir;
   uniform float uSunEnable, uSunIntensity, uAmbient;
   uniform vec3 uSunDir, uSunColor;
@@ -1180,12 +1182,20 @@ const TERRAIN_FRAG = /* glsl */`
     float ra = clamp(fres * uRimIntensity, 0.0, 1.0);
     base = blendMode(base, uRimColor, ra, uRimBlend);
 
-    // glowing trail: a bundle of parallel light lines, densest at the centre
-    float lp = abs(fract(sx / max(0.2, uTrailSpacing) + 0.5) - 0.5) * 2.0;
-    float lines = smoothstep(uTrailLineWidth, 0.0, lp) * env;
-    float core = smoothstep(uTrailWidth, 0.0, pd);       // bright central streak
+    // glowing trail
     float up = clamp(N.y, 0.0, 1.0);
-    base += uPath * (lines * 1.6 + core * 1.4) * uTrailGlow * (0.45 + 0.55 * up);
+    if (uTrailStyle > 0.5) {
+      // two guiding edge lines at ±gap from the centre, dark in the middle
+      float dL = abs(pd - uTrailGap);
+      float edge = smoothstep(uTrailWidth, 0.0, dL);
+      base += uPath * edge * uTrailGlow * 2.0 * (0.45 + 0.55 * up);
+    } else {
+      // a bundle of parallel light lines, densest at the centre
+      float lp = abs(fract(sx / max(0.2, uTrailSpacing) + 0.5) - 0.5) * 2.0;
+      float lines = smoothstep(uTrailLineWidth, 0.0, lp) * env;
+      float core = smoothstep(uTrailWidth, 0.0, pd);     // bright central streak
+      base += uPath * (lines * 1.6 + core * 1.4) * uTrailGlow * (0.45 + 0.55 * up);
+    }
 
     // animated flow fog: luminous wisps drifting along the path
     if (uFlowFog > 0.5) {
@@ -1275,6 +1285,8 @@ function shaderUniforms(geo) {
     uTrailSpacing: { value: params.trailSpacing },
     uTrailLineWidth: { value: params.trailLineWidth },
     uTrailClear: { value: params.trailClear },
+    uTrailStyle: { value: params.trailStyle === 'edges' ? 1 : 0 },
+    uTrailGap: { value: params.trailGap },
     uLightDir: { value: new THREE.Vector3(Math.sin(az), 0, Math.cos(az)) },
     uMinY: { value: bb ? bb.min.y : 0 },
     uMaxY: { value: bb ? bb.max.y : 1 },
@@ -1385,6 +1397,8 @@ function updateShaderUniforms() {
   u.uTrailSpacing.value = params.trailSpacing;
   u.uTrailLineWidth.value = params.trailLineWidth;
   u.uTrailClear.value = params.trailClear;
+  u.uTrailStyle.value = params.trailStyle === 'edges' ? 1 : 0;
+  u.uTrailGap.value = params.trailGap;
   u.uLightDir.value.set(Math.sin(az), 0, Math.cos(az));
 }
 
@@ -2249,7 +2263,9 @@ fDuo.add(params, 'duoHeightLocal').onChange(updateShaderUniforms).name('height: 
 fDuo.add(params, 'shLightAz', 0, 6.283, 0.01).onChange(updateShaderUniforms).name('light angle (facing)');
 fSurf.addColor(params, 'shPath').onChange(updateShaderUniforms).name('trail colour');
 const fTrail = fSurf.addFolder('✨ Trail light');
-fTrail.add(params, 'trailSpacing', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('line spacing');
+fTrail.add(params, 'trailStyle', ['bundle', 'edges']).onChange(updateShaderUniforms).name('style');
+fTrail.add(params, 'trailGap', 0.5, 30, 0.5).onChange(updateShaderUniforms).name('edge gap (edges)');
+fTrail.add(params, 'trailSpacing', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('line spacing (bundle)');
 fTrail.add(params, 'trailLineWidth', 0.02, 0.5, 0.01).onChange(updateShaderUniforms).name('line sharpness');
 fTrail.add(params, 'trailSpill', 0.1, 90, 0.1).onChange(updateShaderUniforms).name('bundle spread');
 fTrail.add(params, 'trailWidth', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('core width');

@@ -221,5 +221,7 @@
   "detailZoom": 2.5,
   "detailNoiseType": "ridged",
   "shLineLight": 1.5,
-  "shLineLightPow": 2.5
+  "shLineLightPow": 2.5,
+  "trailStyle": "edges",
+  "trailGap": 4
 }
