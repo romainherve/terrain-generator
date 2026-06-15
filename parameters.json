@@ -230,5 +230,7 @@
       "focal": 30
     }
   },
-  "defaultView": "Keyvisual"
+  "defaultView": "Keyvisual",
+  "trailShrink": 0.85,
+  "trailShrinkCurve": 2
 }
