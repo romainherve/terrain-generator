@@ -2150,9 +2150,9 @@ function applyLoadedParams(loaded) {
   return n;
 }
 
-const gui = new GUI({ title: 'Terrain' });
+const gui = new GUI({ title: '🏔️ MARTELL — controls' });
 
-const fGrid = gui.addFolder('Grid / size');
+const fGrid = gui.addFolder('📐 Grid / size');
 fGrid.add(params, 'width', 40, 1600, 1).onFinishChange(maybe);
 fGrid.add(params, 'length', 40, 3000, 1).onFinishChange(maybe);
 fGrid.add(params, 'segmentsX', 20, 1200, 1).onFinishChange(maybe).name('resolution X');
@@ -2165,7 +2165,7 @@ fGrid.add(params, 'backFalloff', 0, 1, 0.01).onFinishChange(maybe).name('back fa
 fGrid.add(params, 'backCurve', 0.5, 4, 0.1).onFinishChange(maybe).name('back curve');
 fGrid.add(params, 'backDrop', 0, 400, 1).onFinishChange(maybe).name('back drop');
 
-const fMtn = gui.addFolder('Mountains');
+const fMtn = gui.addFolder('⛰️ Mountains');
 fMtn.add(params, 'seed', 0, 99999, 1).onFinishChange(regen);
 fMtn.add({ randomize: () => { params.seed = (Math.random() * 99999) | 0; gui.controllersRecursive().forEach(c => c.updateDisplay()); regen(); } }, 'randomize').name('🎲 random seed');
 fMtn.add(params, 'mountainHeight', 0, 200, 1).onChange(maybe);
@@ -2179,7 +2179,7 @@ fMtn.add(params, 'smoothing', 0.5, 3, 0.05).onChange(maybe).name('hill roundness
 fMtn.add(params, 'growthFront', 0, 3, 0.05).onChange(maybe).name('height: front');
 fMtn.add(params, 'growthBack', 0, 6, 0.05).onChange(maybe).name('height: back');
 fMtn.add(params, 'growthCurve', 0.3, 4, 0.1).onChange(maybe).name('growth curve');
-const fPeak = fMtn.addFolder('Background mountain');
+const fPeak = fMtn.addFolder('🏔️ Background mountain');
 fPeak.add(params, 'peakEnable').onChange(maybe).name('enable');
 fPeak.add(params, 'peakHeight', 0, 1200, 5).onChange(maybe).name('height');
 fPeak.add(params, 'peakRadius', 100, 2000, 10).onChange(maybe).name('reach (length)');
@@ -2188,14 +2188,14 @@ fPeak.add(params, 'peakPos', 0.5, 1.2, 0.01).onChange(maybe).name('position');
 fPeak.add(params, 'peakCurve', 1, 5, 0.1).onChange(maybe).name('summit sharpness');
 fPeak.add(params, 'peakRidge', 0, 1, 0.02).onChange(maybe).name('slope noise');
 fPeak.add(params, 'peakSkirt', -1.5, 1.5, 0.05).onChange(maybe).name('route around peak');
-const fDetail = fMtn.addFolder('Detail noise');
+const fDetail = fMtn.addFolder('🪨 Detail noise');
 fDetail.add(params, 'detailAmount', 0, 40, 0.5).onChange(maybe).name('amount');
 fDetail.add(params, 'detailScale', 0.01, 0.3, 0.005).onChange(maybe).name('scale (finer →)');
 fDetail.add(params, 'detailZoom', 0.25, 5, 0.05).onChange(maybe).name('pattern zoom (bigger →)');
 fDetail.add(params, 'detailNoiseType', ['fbm', 'ridged', 'billow', 'cellular', 'cracks', 'turbulence']).onChange(maybe).name('noise type');
 fDetail.add(params, 'detailPeakBoost', 0, 6, 0.1).onChange(maybe).name('flank reach');
 
-const fPath = gui.addFolder('Path / valley');
+const fPath = gui.addFolder('🛤️ Path / valley');
 fPath.add(params, 'pathWidth', 2, 60, 0.5).onChange(maybe);
 fPath.add(params, 'wallWidth', 4, 120, 0.5).onChange(maybe).name('wall ramp width');
 fPath.add(params, 'wallCurve', 0.5, 4, 0.1).onChange(maybe).name('wall steepness');
@@ -2214,14 +2214,14 @@ fPath.add(params, 'windPhase', 0, 6.28, 0.01).onChange(maybe).name('wind phase')
 fPath.add(params, 'windGrowthBack', 1, 8, 0.1).onChange(maybe).name('wind growth (back)');
 fPath.add(params, 'windGrowthCurve', 0.5, 4, 0.1).onChange(maybe).name('wind growth curve');
 
-const fSurf = gui.addFolder('Surface shader');
+const fSurf = gui.addFolder('🎨 Surface shader');
 fSurf.add(params, 'surfaceStyle', { 'duotone dunes': 'duotone', 'plain (vertex colour)': 'standard' })
   .onChange(buildTerrain).name('style');
 fSurf.addColor(params, 'shWarm').onChange(updateShaderUniforms).name('warm faces');
 fSurf.addColor(params, 'shCool').onChange(updateShaderUniforms).name('cool faces');
 fSurf.add(params, 'shBlend', 0.0, 0.5, 0.01).onChange(updateShaderUniforms).name('red↔blue blend');
 fSurf.add(params, 'shBalance', -0.5, 0.5, 0.01).onChange(updateShaderUniforms).name('warm/cool balance');
-const fDuo = fSurf.addFolder('Red/blue mapping');
+const fDuo = fSurf.addFolder('🟥 Red/blue mapping');
 fDuo.add(params, 'duotoneMode', Object.keys(DUO_MODES)).onChange(updateShaderUniforms).name('mode');
 fDuo.add(params, 'duoNoiseType', Object.keys(NOISE_TYPES)).onChange(updateShaderUniforms).name('noise type');
 fDuo.add(params, 'duoNoiseScale', 0.002, 0.1, 0.001).onChange(updateShaderUniforms).name('noise scale');
@@ -2232,7 +2232,7 @@ fDuo.add(params, 'duoHeight', 0, 1, 0.01).onChange(updateShaderUniforms).name('h
 fDuo.add(params, 'duoHeightLocal').onChange(updateShaderUniforms).name('height: local per-dune');
 fDuo.add(params, 'shLightAz', 0, 6.283, 0.01).onChange(updateShaderUniforms).name('light angle (facing)');
 fSurf.addColor(params, 'shPath').onChange(updateShaderUniforms).name('trail colour');
-const fTrail = fSurf.addFolder('Trail light');
+const fTrail = fSurf.addFolder('✨ Trail light');
 fTrail.add(params, 'trailSpacing', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('line spacing');
 fTrail.add(params, 'trailLineWidth', 0.02, 0.5, 0.01).onChange(updateShaderUniforms).name('line sharpness');
 fTrail.add(params, 'trailSpill', 0.1, 90, 0.1).onChange(updateShaderUniforms).name('bundle spread');
@@ -2252,7 +2252,7 @@ fSurf.add(params, 'shLineBoost', 0.5, 3, 0.05).onChange(updateShaderUniforms).na
 fSurf.add(params, 'shLineTrailMix', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation→trail near path');
 fSurf.add(params, 'shLineEmissive', 0, 4, 0.05).onChange(updateShaderUniforms).name('red striation glow');
 fSurf.add(params, 'shLineFar', 0.15, 2, 0.05).onChange(updateShaderUniforms).name('far visibility (LOD)');
-const fFlow = fSurf.addFolder('Flow fog (animated)');
+const fFlow = fSurf.addFolder('🌫️ Flow fog (animated)');
 fFlow.add(params, 'flowFog').onChange(updateShaderUniforms).name('enable');
 fFlow.addColor(params, 'flowColor').onChange(updateShaderUniforms).name('colour');
 fFlow.add(params, 'flowIntensity', 0, 2, 0.01).onChange(updateShaderUniforms).name('intensity');
@@ -2261,26 +2261,26 @@ fFlow.add(params, 'flowDensity', 0.02, 0.6, 0.01).onChange(updateShaderUniforms)
 fFlow.add(params, 'flowScale', 0.004, 0.08, 0.002).onChange(updateShaderUniforms).name('wisp scale');
 fFlow.add(params, 'flowReach', 5, 200, 1).onChange(updateShaderUniforms).name('reach from path');
 
-const fRim = fSurf.addFolder('Fresnel rim light');
+const fRim = fSurf.addFolder('💡 Fresnel rim light');
 fRim.addColor(params, 'shRimColor').onChange(updateShaderUniforms).name('rim colour');
 fRim.add(params, 'shRimPower', 0.5, 8, 0.1).onChange(updateShaderUniforms).name('rim tightness');
 fRim.add(params, 'shRimIntensity', 0, 2, 0.02).onChange(updateShaderUniforms).name('rim strength');
 fRim.add(params, 'shRimBlend', Object.keys(LINE_BLENDS)).onChange(updateShaderUniforms).name('blend mode');
 
-const fFog = gui.addFolder('Fog').close();
+const fFog = gui.addFolder('🌁 Fog').close();
 fFog.addColor(params, 'fogColor').onChange(updateFog).name('colour');
 fFog.add(params, 'fogNear', 0, 2000, 5).onChange(updateFog).name('near');
 fFog.add(params, 'fogFar', 100, 4000, 10).onChange(updateFog).name('far');
 fFog.add(params, 'fogHeightFade').onChange(updateFog).name('peak above fog');
 fFog.add(params, 'fogHeight', -100, 600, 5).onChange(updateFog).name('clear above height');
 fFog.add(params, 'fogHeightBand', 10, 800, 5).onChange(updateFog).name('clearing band');
-const fValley = fFog.addFolder('Valley fog (in troughs)');
+const fValley = fFog.addFolder('🌫️ Valley fog (in troughs)');
 fValley.add(params, 'valleyFog', 0, 1, 0.01).onChange(updateFog).name('strength');
 fValley.addColor(params, 'valleyFogColor').onChange(updateFog).name('colour');
 fValley.add(params, 'valleyBottom', 0, 1, 0.01).onChange(updateFog).name('fogged below');
 fValley.add(params, 'valleyTop', 0, 1, 0.01).onChange(updateFog).name('clear above');
 
-const fSun = gui.addFolder('Sun');
+const fSun = gui.addFolder('☀️ Sun');
 fSun.add(params, 'sunEnable').onChange(updateSun).name('enable');
 fSun.add(params, 'sunAzimuth', 0, 360, 1).onChange(updateSun).name('azimuth °');
 fSun.add(params, 'sunElevation', -10, 90, 1).onChange(updateSun).name('elevation °');
@@ -2292,7 +2292,7 @@ fSun.add(params, 'sunSize', 0.005, 0.3, 0.005).onChange(updateSun).name('disc si
 fSun.add(params, 'sunHalo', 0, 2, 0.02).onChange(updateSun).name('halo strength');
 fSun.add(params, 'sunHaloPow', 4, 300, 1).onChange(updateSun).name('halo tightness');
 fSun.add(params, 'sunDriveDuotone').onChange(updateSun).name('drive red/blue split');
-const fShadow = fSun.addFolder('Shadows');
+const fShadow = fSun.addFolder('🌓 Shadows');
 fShadow.add(params, 'shadowEnable').onChange(updateSun).name('enable');
 fShadow.add(params, 'shadowHard').onChange(updateSun).name('hard edges');
 fShadow.add(params, 'shadowStrength', 0, 1, 0.01).onChange(updateSun).name('strength');
@@ -2301,7 +2301,7 @@ fShadow.add(params, 'shadowDist', 20, 400, 5).onChange(updateSun).name('reach');
 fShadow.add(params, 'shadowSoft', 0.02, 1, 0.01).onChange(updateSun).name('softness');
 fShadow.add(params, 'shadowBias', 0, 4, 0.05).onChange(updateSun).name('bias');
 
-const fSky = gui.addFolder('Sky');
+const fSky = gui.addFolder('🌌 Sky');
 fSky.addColor(params, 'skyTop').onChange(updateSky).name('top (zenith)');
 fSky.addColor(params, 'skyMid').onChange(updateSky).name('mid');
 fSky.addColor(params, 'skyHorizon').onChange(updateSky).name('horizon');
@@ -2309,11 +2309,11 @@ fSky.add(params, 'skyHorizonY', 0.02, 1.0, 0.01).onChange(updateSky).name('horiz
 fSky.add(params, 'skyMidY', 0.1, 1.5, 0.01).onChange(updateSky).name('mid height');
 fSky.add(params, 'skyNoise', 0, 0.3, 0.005).onChange(updateSky).name('gradient noise');
 fSky.add(params, 'skyNoiseScale', 0.5, 12, 0.1).onChange(updateSky).name('noise scale');
-const fBgGlow = fSky.addFolder('Background glow');
+const fBgGlow = fSky.addFolder('🌅 Background glow');
 fBgGlow.add(params, 'bgGlow', 0, 3, 0.05).onChange(updateSky).name('strength');
 fBgGlow.addColor(params, 'bgGlowColor').onChange(updateSky).name('colour');
 fBgGlow.add(params, 'bgGlowDiffusion', 0.01, 2, 0.01).onChange(updateSky).name('diffusion');
-const fCloud = fSky.addFolder('Clouds');
+const fCloud = fSky.addFolder('☁️ Clouds');
 fCloud.add(params, 'clouds').onChange(updateSky).name('enable');
 fCloud.addColor(params, 'cloudColor').onChange(updateSky).name('colour');
 fCloud.add(params, 'cloudCoverage', 0, 1, 0.01).onChange(updateSky).name('coverage');
@@ -2323,7 +2323,7 @@ fCloud.add(params, 'cloudSoftness', 0.02, 0.8, 0.01).onChange(updateSky).name('s
 fCloud.add(params, 'cloudSpeed', 0, 5, 0.05).onChange(updateSky).name('drift speed');
 fCloud.add(params, 'cloudHeight', 0, 1, 0.01).onChange(updateSky).name('pattern seed');
 
-const fPost = gui.addFolder('Post-processing');
+const fPost = gui.addFolder('🎞️ Post-processing');
 fPost.add(params, 'post').name('enable');
 fPost.add(params, 'toneMapping', Object.keys(TONE_MAPS)).onChange(applyToneMapping).name('tone mapping');
 fPost.add(params, 'exposure', 0.2, 2.5, 0.01).onChange(v => { renderer.toneMappingExposure = params.exposure; }).name('exposure');
@@ -2333,7 +2333,7 @@ fPost.add(params, 'bloomRadius', 0, 1.5, 0.01).onChange(v => { bloomPass.radius 
 fPost.add(params, 'bloomThreshold', 0, 1.5, 0.01).onChange(v => { bloomPass.threshold = params.bloomThreshold; }).name('bloom threshold');
 fPost.add(params, 'vignette', 0, 2, 0.01).onChange(v => { vignettePass.uniforms.darkness.value = params.vignette; }).name('vignette');
 
-const fGrade = fPost.addFolder('Colour grade');
+const fGrade = fPost.addFolder('🎚️ Colour grade');
 fGrade.add(params, 'look', Object.keys(LOOKS)).onChange(applyLook).name('look / filter');
 fGrade.add(params, 'brightness', 0.3, 2, 0.01).onChange(updateGrade).name('brightness');
 fGrade.add(params, 'contrast', 0.5, 2, 0.01).onChange(updateGrade).name('contrast');
@@ -2344,7 +2344,7 @@ fGrade.add(params, 'tint', -0.3, 0.3, 0.01).onChange(updateGrade).name('tint (gr
 fGrade.add(params, 'hue', -3.14, 3.14, 0.01).onChange(updateGrade).name('hue shift');
 fGrade.add(params, 'grain', 0, 0.3, 0.005).onChange(updateGrade).name('film grain');
 
-const fLine = gui.addFolder('Flow lines');
+const fLine = gui.addFolder('〰️ Flow lines');
 fLine.add(params, 'flowLines').onChange(buildFlowLines).name('show flow lines');
 fLine.add(params, 'lineMode', { 'parallel to path': 'path', 'topographic (contour)': 'contour' })
   .onChange(buildFlowLines).name('line mode');
@@ -2357,7 +2357,7 @@ fLine.addColor(params, 'lineWarm').onChange(buildFlowLines).name('warm (near pat
 fLine.addColor(params, 'lineCool').onChange(buildFlowLines).name('cool (edges)');
 fLine.add(params, 'includeLinesInExport').name('bake into terrain GLB');
 
-const fCam = gui.addFolder('Camera fly / runner');
+const fCam = gui.addFolder('🎥 Camera fly / runner');
 fCam.add(params, 'flyMode').name('🎥 follow path').onChange(() => {
   controls.enabled = !params.flyMode;
   if (!params.flyMode) controls.target.set(0, 20, 0);
@@ -2369,24 +2369,24 @@ fCam.add(params, 'focalLength', 10, 300, 1).onChange(updateLens).name('focal len
 fCam.add(params, 'showRunner').name('show runner');
 fCam.add({ restart: () => { runT = 0; } }, 'restart').name('⏮ restart run');
 
-const fView = gui.addFolder('Camera views');
+const fView = gui.addFolder('📷 Camera views');
 fView.add(ui, 'viewName').name('name');
 fView.add({ s: saveView }, 's').name('＋ save current view');
 fView.add({ d: deleteView }, 'd').name('🗑 delete selected');
 refreshViewDropdown();
 
-const fFrame = gui.addFolder('Frame / ratio');
+const fFrame = gui.addFolder('🖼️ Frame / ratio');
 fFrame.add(params, 'frameRatio', Object.keys(FRAME_RATIOS)).onChange(updateFrame).name('aspect ratio');
 fFrame.add(params, 'frameOpacity', 0, 1, 0.01).onChange(updateFrame).name('bar opacity');
 
-const fLook = gui.addFolder('Display');
+const fLook = gui.addFolder('👁️ Display');
 fLook.add(params, 'showFps').name('show FPS');
 fLook.add(params, 'showPath').onChange(buildPathLine).name('show centerline');
 fLook.add(params, 'wireframe').onChange(() => { if (terrain) terrain.material.wireframe = params.wireframe; });
 fLook.add(params, 'autoUpdate').name('auto-rebuild');
 fLook.add({ rebuild: buildTerrain }, 'rebuild').name('↻ rebuild now');
 
-const fExp = gui.addFolder('Export');
+const fExp = gui.addFolder('📤 Export');
 fExp.add({ glb: exportGLB }, 'glb').name('⬇ Terrain GLB');
 fExp.add({ obj: exportOBJ }, 'obj').name('⬇ Terrain OBJ');
 fExp.add({ c4d: exportC4DSplines }, 'c4d').name('⬇ C4D Splines (.py) ★');
@@ -2394,7 +2394,7 @@ fExp.add({ spl: exportSplinesOBJ }, 'spl').name('⬇ Splines OBJ (other DCCs)');
 fExp.add({ png: bakeLinesTexture }, 'png').name('⬇ Lines texture (.png)');
 fExp.add({ json: exportPathJSON }, 'json').name('⬇ Path JSON (points)');
 
-const fTex = gui.addFolder('Line texture').close();
+const fTex = gui.addFolder('🧵 Line texture').close();
 fTex.add(params, 'texWidth', 256, 8192, 128).name('width px (across path)');
 fTex.add(params, 'texHeight', 256, 16384, 128).name('height px (along path)');
 fTex.add(params, 'texLineWidth', 0.5, 12, 0.5).name('line width (px)');
@@ -2406,16 +2406,16 @@ fTex.add(params, 'texIncludeCenterline').name('include centerline');
 fTex.add(params, 'texFlipU').name('flip U (horizontal)');
 fTex.add(params, 'texFlipV').name('flip V (C4D default)');
 
-const fSet = gui.addFolder('Settings / presets');
+const fSet = gui.addFolder('⚙️ Settings / presets');
 fSet.add({ save: exportSettings }, 'save').name('⬇ Export settings (.json)');
 fSet.add({ load: importSettings }, 'load').name('⬆ Import settings (.json)');
-const fPresets = fSet.addFolder('Browser presets (no download)');
+const fPresets = fSet.addFolder('💾 Browser presets (no download)');
 fPresets.add(ui, 'presetName').name('name');
 fPresets.add({ s: savePreset }, 's').name('＋ save to browser');
 fPresets.add({ d: deletePreset }, 'd').name('🗑 delete selected');
 refreshPresetDropdown();
 
-const fFolder = fSet.addFolder('Linked folder (files on disk)');
+const fFolder = fSet.addFolder('📁 Linked folder (files on disk)');
 fFolder.add({ link: linkFolder }, 'link').name('🔗 link a folder');
 fFolder.add({ r: () => refreshFolderDropdown(true) }, 'r').name('↻ reconnect / refresh');
 fFolder.add(ui, 'folderName').name('name');
