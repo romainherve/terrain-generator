@@ -252,6 +252,8 @@ const params = {
   shLineBoost: 1.4,         // brightness of the surface-derived line colour
   shLineTrailMix: 1.0,      // how strongly lines near the trail take the trail colour
   shLineEmissive: 0.2,      // extra glow on the red (warm) striations only
+  shLineLight: 1.5,         // striations illuminate on faces turned toward the sun
+  shLineLightPow: 2.5,      // tightness of that light catch
   shLineFlowScale: 0.02,    // field scale for the 'flow' striation mode
   shLineFlowWarp: 4.0,      // swirl strength for the 'flow' striation mode
   shLineFar: 0.5,           // distance LOD target (lower = keep lines visible further)
@@ -970,7 +972,7 @@ const TERRAIN_VERT = /* glsl */`
 const TERRAIN_FRAG = /* glsl */`
   precision highp float;
   uniform vec3 uWarm, uCool, uPath, uLineColor, uHaze, uRimColor;
-  uniform float uLineFreq, uLineWidth, uLineIntensity, uLineFromSurface, uLineBoost, uLineTrailMix, uLineFar, uLineEmissive, uLineFlowScale, uLineFlowWarp;
+  uniform float uLineFreq, uLineWidth, uLineIntensity, uLineFromSurface, uLineBoost, uLineTrailMix, uLineFar, uLineEmissive, uLineFlowScale, uLineFlowWarp, uLineLight, uLineLightPow;
   uniform int uLineBlend, uRimBlend, uLineMap;
   uniform float uMinY, uMaxY, uFogNear, uFogFar, uFogHeight, uFogHeightBand, uFogHeightFade;
   uniform float uValleyFog, uValleyTop, uValleyBottom;
@@ -1165,6 +1167,11 @@ const TERRAIN_FRAG = /* glsl */`
     }
     // emissive boost only on the red (warm) striations — t is 0 (blue) .. 1 (red)
     lineCol *= 1.0 + uLineEmissive * t;
+    // light catch: striations on faces turned toward the sun illuminate (sheen)
+    if (uLineLight > 0.0) {
+      float lineLit = max(dot(N, normalize(uSunDir)), 0.0);
+      lineCol *= 1.0 + uLineLight * pow(lineLit, uLineLightPow);
+    }
     base = blendMode(base, lineCol, la, uLineBlend);
 
     // fresnel rim light on grazing edges (bright dune silhouettes)
@@ -1225,6 +1232,8 @@ function shaderUniforms(geo) {
     uLineTrailMix: { value: params.shLineTrailMix },
     uLineFar: { value: params.shLineFar },
     uLineEmissive: { value: params.shLineEmissive },
+    uLineLight: { value: params.shLineLight },
+    uLineLightPow: { value: params.shLineLightPow },
     uLineFlowScale: { value: params.shLineFlowScale },
     uLineFlowWarp: { value: params.shLineFlowWarp },
     uLineMap: { value: STRIATION_MAPS[params.shLineMap] ?? 0 },
@@ -1325,6 +1334,8 @@ function updateShaderUniforms() {
   u.uLineTrailMix.value = params.shLineTrailMix;
   u.uLineFar.value = params.shLineFar;
   u.uLineEmissive.value = params.shLineEmissive;
+  u.uLineLight.value = params.shLineLight;
+  u.uLineLightPow.value = params.shLineLightPow;
   u.uLineFlowScale.value = params.shLineFlowScale;
   u.uLineFlowWarp.value = params.shLineFlowWarp;
   u.uLineMap.value = STRIATION_MAPS[params.shLineMap] ?? 0;
@@ -2256,6 +2267,8 @@ fSurf.add(params, 'shLineFromSurface').onChange(updateShaderUniforms).name('stri
 fSurf.add(params, 'shLineBoost', 0.5, 3, 0.05).onChange(updateShaderUniforms).name('striation brightness');
 fSurf.add(params, 'shLineTrailMix', 0, 1, 0.01).onChange(updateShaderUniforms).name('striation→trail near path');
 fSurf.add(params, 'shLineEmissive', 0, 4, 0.05).onChange(updateShaderUniforms).name('red striation glow');
+fSurf.add(params, 'shLineLight', 0, 4, 0.05).onChange(updateShaderUniforms).name('striation light catch');
+fSurf.add(params, 'shLineLightPow', 0.5, 8, 0.1).onChange(updateShaderUniforms).name('light catch tightness');
 fSurf.add(params, 'shLineFar', 0.15, 2, 0.05).onChange(updateShaderUniforms).name('far visibility (LOD)');
 const fFlow = fSurf.addFolder('🌫️ Flow fog (animated)');
 fFlow.add(params, 'flowFog').onChange(updateShaderUniforms).name('enable');

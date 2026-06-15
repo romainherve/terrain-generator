@@ -219,5 +219,7 @@
   "backDrop": 40,
   "shLineEmissive": 0.3,
   "detailZoom": 2.5,
-  "detailNoiseType": "ridged"
+  "detailNoiseType": "ridged",
+  "shLineLight": 1.5,
+  "shLineLightPow": 2.5
 }
