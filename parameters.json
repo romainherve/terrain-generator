@@ -223,5 +223,11 @@
   "shLineLight": 1.5,
   "shLineLightPow": 2.5,
   "trailStyle": "edges",
-  "trailGap": 4
+  "trailGap": 4,
+  "trailMidColor": "#0a0a16",
+  "trailMid": 0,
+  "trailDots": true,
+  "trailDotInt": 1.2,
+  "trailDotCount": 16,
+  "trailDotSpeed": 0.6
 }

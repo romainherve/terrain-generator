@@ -303,6 +303,12 @@ const params = {
   trailClear: 1.6,      // striation clear-zone width vs the bundle spread (>1 = wider)
   trailStyle: 'bundle', // 'bundle' = filled glow, 'edges' = two guiding lines (dark middle)
   trailGap: 4.0,        // distance of each edge line from the centre (edges style)
+  trailMidColor: '#0a0a16', // colour filled between the two edge rails
+  trailMid: 0.0,        // strength of that middle fill (0 = off)
+  trailDots: true,      // animated dot-lights travelling along the trail
+  trailDotInt: 1.2,     // their brightness
+  trailDotCount: 16,    // how many along the run
+  trailDotSpeed: 0.6,   // travel speed
   // animated flow fog (drifting luminous wisps along the path)
   flowFog: true,
   flowColor: '#cfe0ff',
@@ -983,6 +989,8 @@ const TERRAIN_FRAG = /* glsl */`
   uniform float uWindAmp, uWindFreq, uWindPhase, uLen, uWindGrowth, uWindGrowthCurve;
   uniform float uPeakSkirt, uPeakPos, uPeakRadius;
   uniform float uTrailWidth, uTrailSpill, uTrailGlow, uTrailSpacing, uTrailLineWidth, uTrailClear, uTrailStyle, uTrailGap;
+  uniform float uTrailMidStr, uTrailDotsOn, uTrailDotInt, uTrailDotCount, uTrailDotSpeed;
+  uniform vec3 uTrailMid;
   uniform vec3 uLightDir;
   uniform float uSunEnable, uSunIntensity, uAmbient;
   uniform vec3 uSunDir, uSunColor;
@@ -1185,6 +1193,11 @@ const TERRAIN_FRAG = /* glsl */`
     // glowing trail
     float up = clamp(N.y, 0.0, 1.0);
     if (uTrailStyle > 0.5) {
+      // colour fill between the two rails
+      if (uTrailMidStr > 0.0) {
+        float mid = 1.0 - smoothstep(uTrailGap - uTrailWidth, uTrailGap, pd);
+        base = mix(base, uTrailMid, mid * uTrailMidStr);
+      }
       // two guiding edge lines at ±gap from the centre, dark in the middle
       float dL = abs(pd - uTrailGap);
       float edge = smoothstep(uTrailWidth, 0.0, dL);
@@ -1195,6 +1208,16 @@ const TERRAIN_FRAG = /* glsl */`
       float lines = smoothstep(uTrailLineWidth, 0.0, lp) * env;
       float core = smoothstep(uTrailWidth, 0.0, pd);     // bright central streak
       base += uPath * (lines * 1.6 + core * 1.4) * uTrailGlow * (0.45 + 0.55 * up);
+    }
+
+    // little animated dot-lights travelling along the trail
+    if (uTrailDotsOn > 0.5) {
+      float center = smoothstep(uTrailGap * 1.3 + uTrailWidth, 0.0, pd); // confine to the trail band
+      float along = (vWorldPos.z + uLen * 0.5) / uLen;
+      float ph = along * uTrailDotCount - uTime * uTrailDotSpeed;
+      float seg = abs(fract(ph) - 0.5) * 2.0;
+      float dot = smoothstep(0.12, 0.0, seg);
+      base += uPath * dot * center * uTrailDotInt;
     }
 
     // animated flow fog: luminous wisps drifting along the path
@@ -1287,6 +1310,12 @@ function shaderUniforms(geo) {
     uTrailClear: { value: params.trailClear },
     uTrailStyle: { value: params.trailStyle === 'edges' ? 1 : 0 },
     uTrailGap: { value: params.trailGap },
+    uTrailMid: { value: new THREE.Color(params.trailMidColor) },
+    uTrailMidStr: { value: params.trailMid },
+    uTrailDotsOn: { value: params.trailDots ? 1 : 0 },
+    uTrailDotInt: { value: params.trailDotInt },
+    uTrailDotCount: { value: params.trailDotCount },
+    uTrailDotSpeed: { value: params.trailDotSpeed },
     uLightDir: { value: new THREE.Vector3(Math.sin(az), 0, Math.cos(az)) },
     uMinY: { value: bb ? bb.min.y : 0 },
     uMaxY: { value: bb ? bb.max.y : 1 },
@@ -1399,6 +1428,12 @@ function updateShaderUniforms() {
   u.uTrailClear.value = params.trailClear;
   u.uTrailStyle.value = params.trailStyle === 'edges' ? 1 : 0;
   u.uTrailGap.value = params.trailGap;
+  u.uTrailMid.value.set(params.trailMidColor);
+  u.uTrailMidStr.value = params.trailMid;
+  u.uTrailDotsOn.value = params.trailDots ? 1 : 0;
+  u.uTrailDotInt.value = params.trailDotInt;
+  u.uTrailDotCount.value = params.trailDotCount;
+  u.uTrailDotSpeed.value = params.trailDotSpeed;
   u.uLightDir.value.set(Math.sin(az), 0, Math.cos(az));
 }
 
@@ -2271,6 +2306,13 @@ fTrail.add(params, 'trailSpill', 0.1, 90, 0.1).onChange(updateShaderUniforms).na
 fTrail.add(params, 'trailWidth', 0.5, 12, 0.1).onChange(updateShaderUniforms).name('core width');
 fTrail.add(params, 'trailGlow', 0, 4, 0.05).onChange(updateShaderUniforms).name('intensity');
 fTrail.add(params, 'trailClear', 1, 8, 0.05).onChange(updateShaderUniforms).name('striation clearance');
+fTrail.addColor(params, 'trailMidColor').onChange(updateShaderUniforms).name('middle colour');
+fTrail.add(params, 'trailMid', 0, 1, 0.01).onChange(updateShaderUniforms).name('middle fill');
+const fDots = fTrail.addFolder('Dot-lights (animated)');
+fDots.add(params, 'trailDots').onChange(updateShaderUniforms).name('enable');
+fDots.add(params, 'trailDotInt', 0, 4, 0.05).onChange(updateShaderUniforms).name('intensity');
+fDots.add(params, 'trailDotCount', 1, 80, 1).onChange(updateShaderUniforms).name('number');
+fDots.add(params, 'trailDotSpeed', -4, 4, 0.05).onChange(updateShaderUniforms).name('speed');
 fSurf.addColor(params, 'shLineColor').onChange(updateShaderUniforms).name('striation tint');
 fSurf.add(params, 'shLineMap', Object.keys(STRIATION_MAPS)).onChange(updateShaderUniforms).name('striation mapping');
 fSurf.add(params, 'shLineFlowScale', 0.002, 0.1, 0.001).onChange(updateShaderUniforms).name('flow scale');
