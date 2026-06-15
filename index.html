@@ -35,13 +35,18 @@
     border: 1px solid rgba(255,208,137,.35); font-variant-numeric: tabular-nums;
   }
   #hud b { color: #ffd089; font-size: 16px; }
+  #refimg {
+    position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    z-index: 8; display: none; pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<img id="refimg" alt="reference" />
 <div id="info">
   <b>MARTELL</b> — drag to orbit · scroll to zoom<br/>
-  Press <b>S</b> to show / hide the controls.
+  <b>S</b> controls · <b>R</b> reference overlay.
   <div id="toolbar">
     <button id="btnCam" title="Cycle saved camera views">📷 Camera</button>
     <button id="btnRun" title="Toggle runner / fly-through mode">🏃 Runner</button>
@@ -2379,6 +2384,36 @@ const fFrame = gui.addFolder('🖼️ Frame / ratio');
 fFrame.add(params, 'frameRatio', Object.keys(FRAME_RATIOS)).onChange(updateFrame).name('aspect ratio');
 fFrame.add(params, 'frameOpacity', 0, 1, 0.01).onChange(updateFrame).name('bar opacity');
 
+// reference image overlay (compare the render against a reference live)
+const refImg = document.getElementById('refimg');
+const refState = { show: false, opacity: 0.5, fit: 'contain' };
+const refInput = document.createElement('input');
+refInput.type = 'file'; refInput.accept = 'image/*'; refInput.style.display = 'none';
+document.body.appendChild(refInput);
+function applyRef() {
+  refImg.style.display = (refState.show && refImg.getAttribute('src')) ? 'block' : 'none';
+  refImg.style.opacity = refState.opacity;
+  refImg.style.objectFit = refState.fit;
+}
+function saveRefState() {
+  try { localStorage.setItem('tg.ref', JSON.stringify({ opacity: refState.opacity, fit: refState.fit, img: refImg.getAttribute('src') || '' })); } catch (e) {}
+}
+refInput.addEventListener('change', (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { refImg.src = r.result; refState.show = true; applyRef(); saveRefState(); gui.controllersRecursive().forEach((c) => c.updateDisplay()); setStatus('reference image loaded'); };
+  r.readAsDataURL(f); refInput.value = '';
+});
+try { const st = JSON.parse(localStorage.getItem('tg.ref') || 'null'); if (st) { refState.opacity = st.opacity ?? 0.5; refState.fit = st.fit || 'contain'; if (st.img) refImg.src = st.img; } } catch (e) {}
+applyRef();
+
+const fRef = gui.addFolder('🆚 Reference image');
+fRef.add(refState, 'show').name('show overlay (R)').onChange(applyRef).listen();
+fRef.add(refState, 'opacity', 0, 1, 0.01).name('opacity').onChange(() => { applyRef(); saveRefState(); });
+fRef.add(refState, 'fit', ['contain', 'cover', 'fill']).name('fit').onChange(() => { applyRef(); saveRefState(); });
+fRef.add({ load: () => refInput.click() }, 'load').name('📂 load image…');
+fRef.add({ clr: () => { refImg.removeAttribute('src'); refState.show = false; applyRef(); saveRefState(); gui.controllersRecursive().forEach((c) => c.updateDisplay()); } }, 'clr').name('🗑 clear');
+
 const fLook = gui.addFolder('👁️ Display');
 fLook.add(params, 'showFps').name('show FPS');
 fLook.add(params, 'showPath').onChange(buildPathLine).name('show centerline');
@@ -2514,7 +2549,9 @@ let guiVisible = false;
 addEventListener('keydown', (e) => {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // don't steal typing
-  if (e.key && e.key.toLowerCase() === 's') { guiVisible = !guiVisible; guiVisible ? gui.show() : gui.hide(); }
+  const k = e.key && e.key.toLowerCase();
+  if (k === 's') { guiVisible = !guiVisible; guiVisible ? gui.show() : gui.hide(); }
+  if (k === 'r') { refState.show = !refState.show; applyRef(); gui.controllersRecursive().forEach((c) => c.updateDisplay()); }
 });
 
 // bottom-left quick buttons: cycle saved cameras, toggle runner/fly mode
