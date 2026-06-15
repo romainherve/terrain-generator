@@ -166,9 +166,9 @@
   "toneMapping": "Neutral",
   "exposure": 1.27,
   "outputGain": 0.36,
-  "bloomStrength": 1.05,
+  "bloomStrength": 0.7,
   "bloomRadius": 0.97,
-  "bloomThreshold": 0.85,
+  "bloomThreshold": 1.05,
   "vignette": 1.08,
   "look": "none",
   "brightness": 1.01,
@@ -217,7 +217,7 @@
   "backFalloff": 0.28,
   "backCurve": 1.5,
   "backDrop": 40,
-  "shLineEmissive": 0.45,
+  "shLineEmissive": 0.3,
   "detailZoom": 2.5,
   "detailNoiseType": "ridged"
 }
