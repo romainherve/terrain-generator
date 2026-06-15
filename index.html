@@ -178,6 +178,7 @@ const params = {
   // fine detail noise (sharp ridges on the slopes, concentrated on the mountain)
   detailAmount: 6,
   detailScale: 0.08,  // higher = finer ridges
+  detailZoom: 1.0,    // master resize of the whole detail pattern (higher = bigger)
   detailNoiseType: 'ridged', // fbm | ridged | billow | cellular | cracks | turbulence
   detailPeakBoost: 2.5, // extra detail strength on the mountain
   // path / valley
@@ -872,7 +873,7 @@ function worley2(x, z, edge) {
 function detailNoise(x, z) {
   const type = params.detailNoiseType;
   let amp = 1, freq = 1, sum = 0, norm = 0;
-  const s = params.detailScale;
+  const s = params.detailScale / Math.max(0.01, params.detailZoom); // master zoom resizes the whole pattern
   for (let o = 0; o < 3; o++) {
     const px = x * s * freq + 120.5, pz = z * s * freq - 87.3;
     let n;
@@ -2190,6 +2191,7 @@ fPeak.add(params, 'peakSkirt', -1.5, 1.5, 0.05).onChange(maybe).name('route arou
 const fDetail = fMtn.addFolder('Detail noise');
 fDetail.add(params, 'detailAmount', 0, 40, 0.5).onChange(maybe).name('amount');
 fDetail.add(params, 'detailScale', 0.01, 0.3, 0.005).onChange(maybe).name('scale (finer →)');
+fDetail.add(params, 'detailZoom', 0.25, 5, 0.05).onChange(maybe).name('pattern zoom (bigger →)');
 fDetail.add(params, 'detailNoiseType', ['fbm', 'ridged', 'billow', 'cellular', 'cracks', 'turbulence']).onChange(maybe).name('noise type');
 fDetail.add(params, 'detailPeakBoost', 0, 6, 0.1).onChange(maybe).name('flank reach');
 
