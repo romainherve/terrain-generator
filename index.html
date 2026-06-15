@@ -2486,6 +2486,7 @@ refInput.addEventListener('change', (e) => {
   r.readAsDataURL(f); refInput.value = '';
 });
 try { const st = JSON.parse(localStorage.getItem('tg.ref') || 'null'); if (st) { refState.opacity = st.opacity ?? 0.5; refState.fit = st.fit || 'contain'; if (st.img) refImg.src = st.img; } } catch (e) {}
+if (!refImg.getAttribute('src')) refImg.src = './reference.jpg'; // committed default reference
 applyRef();
 
 const fRef = gui.addFolder('🆚 Reference image');
