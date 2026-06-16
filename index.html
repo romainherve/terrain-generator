@@ -2295,6 +2295,54 @@ function deleteView() {
     setStatus('deleted view "' + name + '"');
   }
 }
+
+// ---- camera animation: interpolate through 2+ saved views ----------------
+const camAnim = { seq: '', duration: 6, easing: 'ease-in-out', loop: false, playing: false, t: 0, posCurve: null, tgtCurve: null, focals: [], lastTgt: new THREE.Vector3() };
+function camEase(name, u) {
+  switch (name) {
+    case 'ease-in': return u * u * u;
+    case 'ease-out': return 1 - Math.pow(1 - u, 3);
+    case 'ease-in-out': return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+    case 'smoothstep': return u * u * (3 - 2 * u);
+    case 'exponential': return u <= 0 ? 0 : Math.pow(2, 10 * u - 10);
+    default: return u; // linear
+  }
+}
+function playCamAnim() {
+  const names = (camAnim.seq.trim() ? camAnim.seq.split(',').map(s => s.trim()) : Object.keys(params.cameraBookmarks)).filter(n => params.cameraBookmarks[n]);
+  if (names.length < 2) { setStatus('camera animation needs at least 2 saved views'); return; }
+  const pos = [], tgt = []; camAnim.focals = [];
+  for (const n of names) { const v = params.cameraBookmarks[n]; pos.push(new THREE.Vector3(v.px, v.py, v.pz)); tgt.push(new THREE.Vector3(v.tx, v.ty, v.tz)); camAnim.focals.push(v.focal); }
+  camAnim.posCurve = new THREE.CatmullRomCurve3(pos, false, 'catmullrom', 0.5);
+  camAnim.tgtCurve = new THREE.CatmullRomCurve3(tgt, false, 'catmullrom', 0.5);
+  camAnim.t = 0; camAnim.playing = true;
+  params.flyMode = false; controls.enabled = false;
+  gui.controllersRecursive().forEach(c => c.updateDisplay());
+  setStatus('camera animation: ' + names.join(' → '));
+}
+function stopCamAnim() {
+  camAnim.playing = false;
+  controls.enabled = !params.flyMode;
+  controls.target.copy(camAnim.lastTgt);
+  controls.update();
+}
+function updateCamAnim(dt) {
+  camAnim.t += dt;
+  let te = camAnim.duration > 0 ? camAnim.t / camAnim.duration : 1;
+  let ending = false;
+  if (te >= 1) { if (camAnim.loop) { camAnim.t %= camAnim.duration; te = camAnim.t / camAnim.duration; } else { te = 1; ending = true; } }
+  const e = camEase(camAnim.easing, Math.min(1, Math.max(0, te)));
+  const pos = camAnim.posCurve.getPointAt(e);
+  const tgt = camAnim.tgtCurve.getPointAt(e);
+  camera.position.copy(pos);
+  camera.lookAt(tgt);
+  camAnim.lastTgt.copy(tgt);
+  const N = camAnim.focals.length, seg = e * (N - 1), i = Math.min(N - 2, Math.floor(seg)), fr = seg - i;
+  const focal = camAnim.focals[i] + (camAnim.focals[i + 1] - camAnim.focals[i]) * fr;
+  camera.fov = 2 * Math.atan(12 / Math.max(1, focal)) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+  if (ending) stopCamAnim();
+}
 function refreshViewDropdown() {
   if (viewGoCtrl) viewGoCtrl.destroy();
   const names = Object.keys(params.cameraBookmarks);
@@ -2689,6 +2737,13 @@ fView.add(ui, 'viewName').name('name');
 fView.add({ s: saveView }, 's').name('＋ save current view');
 fView.add({ d: deleteView }, 'd').name('🗑 delete selected');
 refreshViewDropdown();
+const fAnim = fView.addFolder('🎬 Animation');
+fAnim.add(camAnim, 'seq').name('views (comma, in order)');
+fAnim.add(camAnim, 'duration', 0.5, 60, 0.5).name('duration (s)');
+fAnim.add(camAnim, 'easing', ['linear', 'ease-in', 'ease-out', 'ease-in-out', 'smoothstep', 'exponential']).name('easing');
+fAnim.add(camAnim, 'loop').name('loop');
+fAnim.add({ p: playCamAnim }, 'p').name('▶ play');
+fAnim.add({ s: stopCamAnim }, 's').name('⏹ stop');
 
 const fFrame = gui.addFolder('🖼️ Frame / ratio');
 fFrame.add(params, 'frameRatio', Object.keys(FRAME_RATIOS)).onChange(updateFrame).name('aspect ratio');
@@ -2861,7 +2916,10 @@ renderer.setAnimationLoop(() => {
     traveler.setIntensity(params.charIntensity);
   }
 
-  if (params.flyMode && flowCurve) {
+  if (camAnim.playing) {
+    updateCamAnim(dt);
+    hud.style.display = 'none';
+  } else if (params.flyMode && flowCurve) {
     flyTime += dt;
     flowCurve.getPointAt(runT, _p);
     flowCurve.getPointAt(Math.min(0.999, runT + params.flyLookAhead / curveLen), _a);
