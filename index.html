@@ -233,6 +233,7 @@ const params = {
   flySpeed: 50,
   flyHeight: 4.5,
   flyLookAhead: 16,
+  flyBehind: 14,        // camera distance behind the character (runner follow)
   showRunner: true,
   focalLength: 35,      // mm (full-frame equivalent) -> camera FOV
   frameRatio: 'off',    // letterbox the view to an aspect ratio
@@ -355,15 +356,15 @@ const params = {
   character: true,
   charColor: '#ffe6a6',
   charIntensity: 1.6,
-  charThick: 3.0,       // strand thickness (start)
-  charThickMax: 7.0,    // thickness when fully grown
-  charAmp: 4.0,         // wake amplitude
+  charThick: 0.8,       // strand thickness (start)
+  charThickMax: 2.0,    // thickness when fully grown
+  charAmp: 1.5,         // wake amplitude
   charWaveSpeed: 1.0,
   charPhase: 1.0,
-  charFloat: 8.0,       // height above the path
-  charBob: 1.5,         // vertical bob
-  charSway: 2.0,        // lateral sway
-  charPulseAmp: 5.0,    // turbulence bulge on pickup
+  charFloat: 4.0,       // height above the path
+  charBob: 0.8,         // vertical bob
+  charSway: 1.0,        // lateral sway
+  charPulseAmp: 2.0,    // turbulence bulge on pickup
   charPulseDur: 1.0,
   charPulseWidth: 0.15,
   charGrowDur: 0.6,     // new-strand build time (s)
@@ -1614,22 +1615,14 @@ function buildSpheres() {
   for (let i = 0; i < n; i++) {
     const t = (i + 0.5) / n;
     const p = flowCurve.getPointAt(t);
-    const collectable = (i % 2 === 0);
-    let base;
-    if (collectable) {
-      base = p.clone(); base.y += params.charFloat; // on the head's trajectory
-    } else {
-      flowCurve.getTangentAt(t, _side); _side.crossVectors(_side, TRAVELER_UP).normalize();
-      base = p.clone().addScaledVector(_side, params.sphSpread * ((i % 4 < 2) ? 1 : -1));
-      base.y += params.charFloat + params.sphElevation;
-    }
+    const base = p.clone(); base.y += params.charFloat; // all on the head's trajectory
     const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(params.sphColor), transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), mat);
     mesh.position.copy(base);
     sphereGroup.add(mesh);
-    spheres.push({ mesh, base, phase: i * 1.7, collectable, collected: false, popT: 0, startY: base.y });
+    spheres.push({ mesh, base, phase: i * 1.7, collectable: true, collected: false, popT: 0, startY: base.y });
   }
-  collectableCount = spheres.filter((s) => s.collectable).length;
+  collectableCount = spheres.length;
   collectedCount = 0;
 }
 
@@ -2663,6 +2656,7 @@ fCam.add(params, 'flyMode').name('🎥 follow path').onChange(() => {
 fCam.add(params, 'flySpeed', 2, 80, 1).name('speed');
 fCam.add(params, 'flyHeight', 0.5, 30, 0.5).name('camera height');
 fCam.add(params, 'flyLookAhead', 2, 60, 1).name('look ahead');
+fCam.add(params, 'flyBehind', 0, 60, 1).name('behind character');
 fCam.add(params, 'focalLength', 10, 300, 1).onChange(updateLens).name('focal length (mm)');
 fCam.add(params, 'showRunner').name('show runner');
 fCam.add({ restart: () => { runT = 0; } }, 'restart').name('⏮ restart run');
@@ -2686,8 +2680,6 @@ fChar.add(params, 'charGrowDur', 0.1, 5, 0.05).onChange(applyCharacter).name('st
 const fSph = gui.addFolder('🔵 Spheres');
 fSph.add(params, 'sphCount', 0, 60, 1).onChange(buildSpheres).name('count');
 fSph.add(params, 'sphSize', 0.5, 12, 0.1).name('size');
-fSph.add(params, 'sphSpread', 0, 80, 1).onChange(buildSpheres).name('side spread');
-fSph.add(params, 'sphElevation', 0, 40, 0.5).onChange(buildSpheres).name('side elevation');
 fSph.addColor(params, 'sphColor').onChange(() => { for (const s of spheres) s.mesh.material.color.set(params.sphColor); }).name('colour');
 fSph.add(params, 'sphFloatAmp', 0, 6, 0.1).name('float amplitude');
 fSph.add(params, 'sphFloatSpeed', 0, 4, 0.05).name('float speed');
@@ -2812,6 +2804,7 @@ addEventListener('resize', () => {
 const clock = new THREE.Clock();
 const _p = new THREE.Vector3();
 const _a = new THREE.Vector3();
+const _tan = new THREE.Vector3();
 let flyTime = 0;
 
 renderer.setAnimationLoop(() => {
@@ -2865,8 +2858,15 @@ renderer.setAnimationLoop(() => {
     flyTime += dt;
     flowCurve.getPointAt(runT, _p);
     flowCurve.getPointAt(Math.min(0.999, runT + params.flyLookAhead / curveLen), _a);
-    camera.position.set(_p.x, _p.y + params.flyHeight, _p.z);
-    camera.lookAt(_a.x, _a.y + params.flyHeight * 0.5, _a.z);
+    if (params.character) {
+      // third-person: sit just behind the character, looking ahead
+      flowCurve.getTangentAt(runT, _tan);
+      camera.position.set(_p.x - _tan.x * params.flyBehind, _p.y + params.charFloat + params.flyHeight, _p.z - _tan.z * params.flyBehind);
+      camera.lookAt(_a.x, _a.y + params.charFloat, _a.z);
+    } else {
+      camera.position.set(_p.x, _p.y + params.flyHeight, _p.z);
+      camera.lookAt(_a.x, _a.y + params.flyHeight * 0.5, _a.z);
+    }
     hud.style.display = 'block';
     const dist = Math.round(runT * curveLen);
     hud.innerHTML = `DISTANCE <b>${dist} M</b> &nbsp;·&nbsp; TIME <b>${pad((flyTime / 60) | 0)}:${pad((flyTime % 60) | 0)}</b> &nbsp;·&nbsp; SPEED <b>${params.flySpeed}</b>`;
