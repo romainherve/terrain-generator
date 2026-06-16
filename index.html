@@ -39,6 +39,35 @@
     position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain;
     z-index: 8; display: none; pointer-events: none;
   }
+  #timeline {
+    position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 11;
+    display: none; flex-direction: column; gap: 8px;
+    background: rgba(10,12,20,.85); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 10px; padding: 10px 12px; color: #cdd3e0;
+    font: 12px system-ui, sans-serif; backdrop-filter: blur(6px);
+  }
+  #timeline.show { display: flex; }
+  #timeline button, #timeline select, #timeline input {
+    font: inherit; color: #cdd3e0; background: rgba(40,46,66,.85);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  }
+  #timeline button:hover { background: rgba(60,68,96,.9); }
+  #timeline button.on { color: #0a0c14; background: #ffd089; border-color: #ffd089; }
+  #timeline input[type=number] { width: 62px; cursor: text; }
+  #timeline label { display: inline-flex; align-items: center; gap: 4px; color: #9aa3b5; }
+  #tlTransport, #tlInspector { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+  #tlTime { min-width: 116px; font-variant-numeric: tabular-nums; color: #9aa3b5; }
+  #tlTrack {
+    position: relative; height: 38px; border-radius: 6px; margin: 2px 0;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.10);
+    overflow: hidden; cursor: pointer;
+  }
+  #tlPlayhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffd089; left: 0; pointer-events: none; }
+  .tlPin {
+    position: absolute; top: 6px; width: 12px; height: 26px; margin-left: -6px;
+    background: rgba(120,140,200,.92); border: 1px solid #ffd089; border-radius: 3px; cursor: grab;
+  }
+  .tlPin.sel { background: #ffd089; border-color: #fff; }
 </style>
 </head>
 <body>
@@ -48,12 +77,41 @@
   <b>MARTELL</b> — drag to orbit · scroll to zoom<br/>
   <b>S</b> controls · <b>R</b> reference overlay.
   <div id="toolbar">
+    <button id="btnBuild" class="on" title="Build the environment & look">🔧 Build</button>
+    <button id="btnAnimate" title="Camera animation workspace">🎬 Animate</button>
     <button id="btnCam" title="Cycle saved camera views">📷 Camera</button>
     <button id="btnRun" title="Toggle runner / fly-through mode">🏃 Runner</button>
   </div>
 </div>
 <div id="status">ready</div>
 <div id="hud">DISTANCE <b>0 M</b> &nbsp;·&nbsp; TIME <b>00:00</b></div>
+<div id="timeline" aria-hidden="true">
+  <div id="tlTransport">
+    <button id="tlPlay" title="play">▶</button>
+    <button id="tlPause" title="pause">⏸</button>
+    <button id="tlStop" title="stop">⏹</button>
+    <button id="tlLoop" title="loop">🔁</button>
+    <span id="tlTime">0.00 / 8.00 s</span>
+    <button id="tlAddKey" title="add keyframe from current camera">＋ Key</button>
+    <button id="tlDelKey" title="delete selected keyframe">🗑</button>
+    <button id="tlGoKey" title="jump to selected keyframe">⤓ Go</button>
+    <select id="tlInsertView"><option value="">insert saved view…</option></select>
+  </div>
+  <div id="tlTrack"><div id="tlPlayhead"></div></div>
+  <div id="tlInspector">
+    <label>time <input id="tlKeyTime" type="number" step="0.05" min="0" /></label>
+    <label>easing
+      <select id="tlKeyEase">
+        <option>linear</option><option>ease-in</option><option>ease-out</option>
+        <option>ease-in-out</option><option>smoothstep</option><option>exponential</option>
+      </select>
+    </label>
+    <label>duration <input id="tlDuration" type="number" step="0.5" min="0.5" /></label>
+    <label><input id="tlFocusLock" type="checkbox" /> focus-lock</label>
+    <button id="tlSetFocus" title="set focus point from current view target">🎯 set focus</button>
+    <button id="tlExport" title="export framed WebM">⬚ Export WebM</button>
+  </div>
+</div>
 
 <script type="importmap">
 {
@@ -75,6 +133,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 
 const statusEl = document.getElementById('status');
@@ -404,6 +463,14 @@ const params = {
   // named camera views { name: {px,py,pz, tx,ty,tz, focal} } — saved with the JSON
   cameraBookmarks: {},
   defaultView: '', // camera view to jump to on load (if it exists)
+  // Animate mode: keyframe timeline (camera poses as quaternions), motion blur, export
+  timeline: {
+    duration: 8, loop: false, focusLock: false, focusPoint: { x: 0, y: 0, z: 0 },
+    keys: [], // { t, px,py,pz, qx,qy,qz,qw, focal, easing } sorted by t
+  },
+  motionBlur: { enabled: false, damp: 0.85 },
+  exportFps: 30,
+  exportResHeight: 1920,
 };
 
 // Default scene preset — baked from "Latest - parameters.json"
@@ -635,6 +702,10 @@ const _sz = renderer.getDrawingBufferSize(new THREE.Vector2());
 const composerTarget = new THREE.WebGLRenderTarget(_sz.x, _sz.y, { type: THREE.HalfFloatType, samples: 4 });
 const composer = new EffectComposer(renderer, composerTarget);
 composer.addPass(new RenderPass(scene, camera));
+const afterimagePass = new AfterimagePass();          // camera motion blur (frame accumulation)
+afterimagePass.uniforms.damp.value = params.motionBlur.damp;
+afterimagePass.enabled = params.motionBlur.enabled;
+composer.addPass(afterimagePass);
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(innerWidth, innerHeight),
   params.bloomStrength, params.bloomRadius, params.bloomThreshold
@@ -2274,7 +2345,7 @@ function saveView() {
   params.cameraBookmarks[name] = captureView();
   ui.viewName = '';
   gui.controllersRecursive().forEach(c => c.updateDisplay());
-  refreshViewDropdown();
+  refreshViewDropdown(); refreshInsertViewDropdown();
   setStatus('saved camera view "' + name + '"');
 }
 function goView(name) {
@@ -2291,7 +2362,7 @@ function deleteView() {
   const name = ui.viewGo;
   if (name && params.cameraBookmarks[name]) {
     delete params.cameraBookmarks[name];
-    refreshViewDropdown();
+    refreshViewDropdown(); refreshInsertViewDropdown();
     setStatus('deleted view "' + name + '"');
   }
 }
@@ -2345,12 +2416,226 @@ function updateCamAnim(dt) {
   const e = camEase(camAnim.easing, Math.min(1, Math.max(0, te)));
   camera.position.copy(camAnim.posCurve.getPointAt(e));
   const N = camAnim.quats.length, seg = e * (N - 1), i = Math.min(N - 2, Math.max(0, Math.floor(seg))), fr = seg - i;
-  camera.quaternion.slerpQuaternions(camAnim.quats[i], camAnim.quats[i + 1], fr); // smooth orientation, no flip
+  if (params.timeline.focusLock) {
+    _m4.lookAt(camera.position, focusPointV3, CAM_UP);
+    camera.quaternion.setFromRotationMatrix(_m4);
+  } else {
+    camera.quaternion.slerpQuaternions(camAnim.quats[i], camAnim.quats[i + 1], fr); // smooth orientation, no flip
+  }
   const focal = camAnim.focals[i] + (camAnim.focals[i + 1] - camAnim.focals[i]) * fr;
   camera.fov = 2 * Math.atan(12 / Math.max(1, focal)) * 180 / Math.PI;
   camera.updateProjectionMatrix();
   if (ending) stopCamAnim();
 }
+
+// ===== Animate mode: keyframe timeline, focus-lock, video export =============
+let workspaceMode = 'build';
+const focusPointV3 = new THREE.Vector3();
+const _m4 = new THREE.Matrix4(), _qTmp = new THREE.Quaternion(), _dirTmp = new THREE.Vector3();
+const tl = { playing: false, t: 0, posCurve: null, quats: [], focals: [], times: [], easings: [], selected: -1, dragKey: -1, dragPlayhead: false };
+let mediaRecorder = null, recordChunks = null, exporting = false, preExportSize = null;
+
+function applyPose(quat, focal, pos) {
+  camera.position.copy(pos);
+  camera.quaternion.copy(quat);
+  camera.fov = 2 * Math.atan(12 / Math.max(1, focal)) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+}
+function buildTimeline() {
+  const keys = [...params.timeline.keys].sort((a, b) => a.t - b.t);
+  tl.times = keys.map(k => k.t);
+  tl.focals = keys.map(k => k.focal);
+  tl.easings = keys.map(k => k.easing || 'linear');
+  tl.quats = keys.map(k => new THREE.Quaternion(k.qx, k.qy, k.qz, k.qw).normalize());
+  const pts = keys.map(k => new THREE.Vector3(k.px, k.py, k.pz));
+  tl.posCurve = pts.length >= 2 ? new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5) : (pts.length === 1 ? pts[0] : null);
+  return keys.length;
+}
+function sampleTimeline(time) {
+  const T = tl.times, N = T.length;
+  if (!N) return;
+  if (N === 1) { applyPose(tl.quats[0], tl.focals[0], tl.posCurve); return; }
+  const tc = Math.max(T[0], Math.min(T[N - 1], time));
+  let i = 0; while (i < N - 2 && tc > T[i + 1]) i++;
+  const span = (T[i + 1] - T[i]) || 1e-6;
+  const local = camEase(tl.easings[i], (tc - T[i]) / span);
+  const pos = tl.posCurve.getPoint((i + local) / (N - 1));      // index-uniform (aligns with segment)
+  let quat;
+  if (params.timeline.focusLock) { _m4.lookAt(pos, focusPointV3, CAM_UP); quat = _qTmp.setFromRotationMatrix(_m4); }
+  else quat = _qTmp.slerpQuaternions(tl.quats[i], tl.quats[i + 1], local);
+  const focal = tl.focals[i] + (tl.focals[i + 1] - tl.focals[i]) * local;
+  applyPose(quat, focal, pos);
+}
+function playTimeline(fromStart) {
+  if (buildTimeline() < 1) { setStatus('add at least one keyframe'); return; }
+  if (fromStart) tl.t = 0;
+  tl.playing = true; camAnim.playing = false;
+  params.flyMode = false; controls.enabled = false;
+}
+function pauseTimeline() { tl.playing = false; }
+function stopTimeline() {
+  tl.playing = false; tl.t = 0;
+  controls.enabled = true;
+  camera.getWorldDirection(_dirTmp);
+  controls.target.copy(camera.position).addScaledVector(_dirTmp, 40);
+  controls.update();
+  updatePlayheadUI();
+}
+function scrubTimeline(time) {
+  if (buildTimeline() < 1) return;
+  tl.t = Math.max(0, Math.min(params.timeline.duration, time));
+  sampleTimeline(tl.t);
+  // keep orbit pivot in front so the loop's controls.update() preserves this pose
+  camera.getWorldDirection(_dirTmp);
+  controls.target.copy(camera.position).addScaledVector(_dirTmp, 40);
+  updatePlayheadUI();
+}
+function updateTimeline(dt) {
+  tl.t += dt;
+  if (tl.t >= params.timeline.duration) {
+    if (params.timeline.loop && !exporting) tl.t %= params.timeline.duration; // export is always one-shot
+    else { tl.t = params.timeline.duration; sampleTimeline(tl.t); tl.playing = false; updatePlayheadUI(); if (exporting) finishExport(); return; }
+  }
+  sampleTimeline(tl.t); updatePlayheadUI();
+  if (exporting) setStatus('exporting… ' + Math.round(tl.t / params.timeline.duration * 100) + '%');
+}
+function updatePlayheadUI() {
+  const dur = params.timeline.duration || 1;
+  const ph = document.getElementById('tlPlayhead');
+  if (ph) ph.style.left = (Math.min(1, tl.t / dur) * 100) + '%';
+  const te = document.getElementById('tlTime');
+  if (te) te.textContent = tl.t.toFixed(2) + ' / ' + dur.toFixed(2) + ' s';
+}
+
+// ---- keyframes ----
+function tlAddKeyFromCamera() {
+  params.timeline.keys.push({
+    t: Math.min(params.timeline.duration, tl.t || 0),
+    px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+    qx: camera.quaternion.x, qy: camera.quaternion.y, qz: camera.quaternion.z, qw: camera.quaternion.w,
+    focal: params.focalLength, easing: 'ease-in-out',
+  });
+  params.timeline.keys.sort((a, b) => a.t - b.t);
+  buildTimeline(); renderPins();
+  setStatus('keyframe added (' + params.timeline.keys.length + ')');
+}
+function tlInsertSavedView(name) {
+  const v = params.cameraBookmarks[name]; if (!v) return;
+  _m4.lookAt(new THREE.Vector3(v.px, v.py, v.pz), new THREE.Vector3(v.tx, v.ty, v.tz), CAM_UP);
+  const q = new THREE.Quaternion().setFromRotationMatrix(_m4);
+  params.timeline.keys.push({ t: Math.min(params.timeline.duration, tl.t || 0), px: v.px, py: v.py, pz: v.pz, qx: q.x, qy: q.y, qz: q.z, qw: q.w, focal: v.focal, easing: 'ease-in-out' });
+  params.timeline.keys.sort((a, b) => a.t - b.t);
+  buildTimeline(); renderPins();
+  setStatus('inserted view "' + name + '"');
+}
+function tlDeleteSelected() {
+  if (tl.selected < 0 || tl.selected >= params.timeline.keys.length) return;
+  params.timeline.keys.splice(tl.selected, 1); tl.selected = -1;
+  buildTimeline(); renderPins();
+}
+function tlGoToKey() { if (tl.selected >= 0) scrubTimeline(params.timeline.keys[tl.selected].t); }
+function renderPins() {
+  const track = document.getElementById('tlTrack');
+  if (!track) return;
+  track.querySelectorAll('.tlPin').forEach(n => n.remove());
+  const dur = params.timeline.duration || 1;
+  params.timeline.keys.forEach((k, idx) => {
+    const pin = document.createElement('div');
+    pin.className = 'tlPin' + (idx === tl.selected ? ' sel' : '');
+    pin.style.left = (Math.min(1, k.t / dur) * 100) + '%';
+    pin.dataset.idx = idx;
+    track.appendChild(pin);
+  });
+  syncInspector();
+}
+function syncInspector() {
+  const kt = document.getElementById('tlKeyTime'), ke = document.getElementById('tlKeyEase');
+  const k = params.timeline.keys[tl.selected];
+  if (kt) { kt.value = k ? k.t.toFixed(2) : ''; kt.disabled = !k; }
+  if (ke) { ke.value = k ? (k.easing || 'linear') : 'ease-in-out'; ke.disabled = !k; }
+}
+function refreshInsertViewDropdown() {
+  const sel = document.getElementById('tlInsertView');
+  if (!sel) return;
+  const names = Object.keys(params.cameraBookmarks);
+  sel.innerHTML = '<option value="">insert saved view…</option>' + names.map(n => '<option value="' + n + '">' + n + '</option>').join('');
+}
+
+// ---- Build / Animate mode ----
+function setWorkspaceMode(mode) {
+  workspaceMode = mode;
+  const animate = mode === 'animate';
+  document.getElementById('btnBuild').classList.toggle('on', !animate);
+  document.getElementById('btnAnimate').classList.toggle('on', animate);
+  document.getElementById('timeline').classList.toggle('show', animate);
+  document.getElementById('timeline').setAttribute('aria-hidden', String(!animate));
+  BUILD_ONLY_FOLDERS.forEach(f => animate ? f.hide() : f.show());
+  if (animate) {
+    if (camAnim.playing) stopCamAnim();
+    params.flyMode = false; controls.enabled = true; syncRunBtn();
+    buildTimeline(); renderPins(); refreshInsertViewDropdown(); syncInspector(); updatePlayheadUI();
+    document.getElementById('tlDuration').value = params.timeline.duration;
+    document.getElementById('tlFocusLock').checked = params.timeline.focusLock;
+    document.getElementById('tlLoop').classList.toggle('on', params.timeline.loop);
+  } else {
+    stopTimeline();
+  }
+}
+
+// ---- focus point ----
+function setFocusFromTarget() {
+  focusPointV3.copy(controls.target);
+  params.timeline.focusPoint = { x: focusPointV3.x, y: focusPointV3.y, z: focusPointV3.z };
+  setStatus('focus point set');
+}
+
+// ---- video export (framed WebM) ----
+function startExport() {
+  if (exporting) return;
+  if (buildTimeline() < 2) { setStatus('need ≥2 keyframes to export'); return; }
+  const canvas = renderer.domElement;
+  const ratio = FRAME_RATIOS[params.frameRatio] || (innerWidth / innerHeight);
+  let h = Math.round(params.exportResHeight), w = Math.round(h * ratio);
+  w -= w % 2; h -= h % 2;
+  preExportSize = { w: innerWidth, h: innerHeight, aspect: camera.aspect, pr: renderer.getPixelRatio() };
+  renderer.setPixelRatio(1);
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h); bloomPass.setSize(w, h); afterimagePass.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  const mimes = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = mimes.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+  if (!window.MediaRecorder) { setStatus('MediaRecorder not supported here (use Chrome)'); restoreExportSize(); return; }
+  const stream = canvas.captureStream(params.exportFps);
+  recordChunks = [];
+  mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 16e6 } : {});
+  mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordChunks.push(e.data); };
+  mediaRecorder.onstop = downloadRecording;
+  exporting = true;
+  mediaRecorder.start();
+  setStatus('exporting… 0%  (' + w + '×' + h + ')');
+  playTimeline(true);
+}
+function finishExport() { if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop(); }
+function restoreExportSize() {
+  if (!preExportSize) return;
+  renderer.setPixelRatio(preExportSize.pr);
+  renderer.setSize(preExportSize.w, preExportSize.h, false);
+  composer.setSize(preExportSize.w, preExportSize.h); bloomPass.setSize(preExportSize.w, preExportSize.h); afterimagePass.setSize(preExportSize.w, preExportSize.h);
+  camera.aspect = preExportSize.aspect; camera.updateProjectionMatrix();
+  preExportSize = null;
+}
+function downloadRecording() {
+  const blob = new Blob(recordChunks, { type: 'video/webm' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'martell-' + Date.now() + '.webm';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  restoreExportSize();
+  exporting = false; mediaRecorder = null; recordChunks = null;
+  setStatus('export complete');
+}
+
 function refreshViewDropdown() {
   if (viewGoCtrl) viewGoCtrl.destroy();
   const names = Object.keys(params.cameraBookmarks);
@@ -2479,6 +2764,12 @@ function applyLoadedParams(loaded) {
   buildTerrain();
   applyToneMapping(); updatePost(); updateGrade(); updateFog(); updateSky(); updateSun(); updateLens(); updateFrame();
   refreshViewDropdown();
+  // re-sync Animate-mode runtime state from the loaded params
+  const fp = params.timeline.focusPoint || { x: 0, y: 0, z: 0 };
+  focusPointV3.set(fp.x, fp.y, fp.z);
+  afterimagePass.enabled = params.motionBlur.enabled;
+  afterimagePass.uniforms.damp.value = params.motionBlur.damp;
+  if (workspaceMode === 'animate') { buildTimeline(); renderPins(); refreshInsertViewDropdown(); updatePlayheadUI(); }
   controls.enabled = !params.flyMode;
   runT = 0;
   return n;
@@ -2679,6 +2970,8 @@ fPost.add(params, 'bloomStrength', 0, 2.5, 0.01).onChange(v => { bloomPass.stren
 fPost.add(params, 'bloomRadius', 0, 1.5, 0.01).onChange(v => { bloomPass.radius = params.bloomRadius; }).name('bloom radius');
 fPost.add(params, 'bloomThreshold', 0, 1.5, 0.01).onChange(v => { bloomPass.threshold = params.bloomThreshold; }).name('bloom threshold');
 fPost.add(params, 'vignette', 0, 2, 0.01).onChange(v => { vignettePass.uniforms.darkness.value = params.vignette; }).name('vignette');
+fPost.add(params.motionBlur, 'enabled').name('motion blur').onChange(v => { afterimagePass.enabled = v; });
+fPost.add(params.motionBlur, 'damp', 0, 0.96, 0.01).name('motion blur amount').onChange(v => { afterimagePass.uniforms.damp.value = v; });
 
 const fGrade = fPost.addFolder('🎚️ Colour grade');
 fGrade.add(params, 'look', Object.keys(LOOKS)).onChange(applyLook).name('look / filter');
@@ -2802,6 +3095,9 @@ fExp.add({ c4d: exportC4DSplines }, 'c4d').name('⬇ C4D Splines (.py) ★');
 fExp.add({ spl: exportSplinesOBJ }, 'spl').name('⬇ Splines OBJ (other DCCs)');
 fExp.add({ png: bakeLinesTexture }, 'png').name('⬇ Lines texture (.png)');
 fExp.add({ json: exportPathJSON }, 'json').name('⬇ Path JSON (points)');
+fExp.add({ webm: () => startExport() }, 'webm').name('🎬 Animation WebM (framed)');
+fExp.add(params, 'exportFps', 24, 60, 1).name('export fps');
+fExp.add(params, 'exportResHeight', 480, 2160, 60).name('export height px');
 
 const fTex = gui.addFolder('🧵 Line texture').close();
 fTex.add(params, 'texWidth', 256, 8192, 128).name('width px (across path)');
@@ -2856,11 +3152,13 @@ document.body.appendChild(fpsEl);
 let fpsAccum = 0, fpsFrames = 0;
 
 addEventListener('resize', () => {
+  if (exporting) return; // keep the framed export buffer fixed while recording
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
   bloomPass.setSize(innerWidth, innerHeight);
+  afterimagePass.setSize(innerWidth, innerHeight);
   updateFrame();
 });
 
@@ -2924,7 +3222,10 @@ renderer.setAnimationLoop(() => {
     traveler.setIntensity(params.charIntensity);
   }
 
-  if (camAnim.playing) {
+  if (tl.playing) {
+    updateTimeline(dt);
+    hud.style.display = 'none';
+  } else if (camAnim.playing) {
     updateCamAnim(dt);
     hud.style.display = 'none';
   } else if (params.flyMode && flowCurve) {
@@ -2984,6 +3285,88 @@ btnRun.addEventListener('click', () => {
   syncRunBtn();
 });
 syncRunBtn();
+
+// ===== Build / Animate mode switch + timeline DOM wiring =====================
+// Build-only folders are hidden in Animate; camera/views/frame/post/look/export stay reachable.
+const BUILD_ONLY_FOLDERS = [fGrid, fMtn, fPath, fSurf, fSun, fSky, fFog, fLine, fChar, fSph, fSet, fRef, fTex];
+
+document.getElementById('btnBuild').addEventListener('click', () => setWorkspaceMode('build'));
+document.getElementById('btnAnimate').addEventListener('click', () => setWorkspaceMode('animate'));
+
+// transport
+document.getElementById('tlPlay').addEventListener('click', () => playTimeline(tl.t >= params.timeline.duration));
+document.getElementById('tlPause').addEventListener('click', pauseTimeline);
+document.getElementById('tlStop').addEventListener('click', stopTimeline);
+document.getElementById('tlLoop').addEventListener('click', (e) => {
+  params.timeline.loop = !params.timeline.loop;
+  e.currentTarget.classList.toggle('on', params.timeline.loop);
+});
+// keyframes
+document.getElementById('tlAddKey').addEventListener('click', tlAddKeyFromCamera);
+document.getElementById('tlDelKey').addEventListener('click', tlDeleteSelected);
+document.getElementById('tlGoKey').addEventListener('click', tlGoToKey);
+document.getElementById('tlInsertView').addEventListener('change', (e) => {
+  if (e.target.value) { tlInsertSavedView(e.target.value); e.target.value = ''; }
+});
+// inspector
+document.getElementById('tlKeyTime').addEventListener('input', (e) => {
+  const k = params.timeline.keys[tl.selected]; if (!k) return;
+  k.t = Math.max(0, Math.min(params.timeline.duration, parseFloat(e.target.value) || 0));
+  const ref = k; params.timeline.keys.sort((a, b) => a.t - b.t);
+  tl.selected = params.timeline.keys.indexOf(ref);
+  buildTimeline(); renderPins();
+});
+document.getElementById('tlKeyEase').addEventListener('change', (e) => {
+  const k = params.timeline.keys[tl.selected]; if (!k) return;
+  k.easing = e.target.value; buildTimeline();
+});
+document.getElementById('tlDuration').addEventListener('input', (e) => {
+  params.timeline.duration = Math.max(0.5, parseFloat(e.target.value) || 8);
+  renderPins(); updatePlayheadUI();
+});
+document.getElementById('tlFocusLock').addEventListener('change', (e) => {
+  params.timeline.focusLock = e.target.checked;
+});
+document.getElementById('tlSetFocus').addEventListener('click', setFocusFromTarget);
+document.getElementById('tlExport').addEventListener('click', startExport);
+
+// timeline track: click pin to select, drag pin to retime, click empty to scrub
+const tlTrack = document.getElementById('tlTrack');
+function trackTimeFromEvent(e) {
+  const r = tlTrack.getBoundingClientRect();
+  const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  return f * params.timeline.duration;
+}
+tlTrack.addEventListener('pointerdown', (e) => {
+  const pin = e.target.closest('.tlPin');
+  if (pin) {
+    tl.selected = parseInt(pin.dataset.idx, 10);
+    tl.dragKey = tl.selected;
+    renderPins();
+    tlTrack.setPointerCapture(e.pointerId);
+  } else {
+    tl.dragPlayhead = true;
+    tlTrack.setPointerCapture(e.pointerId);
+    scrubTimeline(trackTimeFromEvent(e));
+  }
+});
+tlTrack.addEventListener('pointermove', (e) => {
+  if (tl.dragKey >= 0) {
+    const k = params.timeline.keys[tl.dragKey]; if (!k) return;
+    k.t = Math.max(0, Math.min(params.timeline.duration, trackTimeFromEvent(e)));
+    const ref = k; params.timeline.keys.sort((a, b) => a.t - b.t);
+    tl.dragKey = tl.selected = params.timeline.keys.indexOf(ref);
+    buildTimeline(); renderPins();
+  } else if (tl.dragPlayhead) {
+    scrubTimeline(trackTimeFromEvent(e));
+  }
+});
+function endTrackDrag(e) {
+  tl.dragKey = -1; tl.dragPlayhead = false;
+  try { tlTrack.releasePointerCapture(e.pointerId); } catch (_) {}
+}
+tlTrack.addEventListener('pointerup', endTrackDrag);
+tlTrack.addEventListener('pointercancel', endTrackDrag);
 
 // Load the committed default parameters (parameters.json) and apply them as the
 // startup defaults. Works on the live site too; the baked-in defaults are the
