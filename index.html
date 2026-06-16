@@ -233,7 +233,7 @@ const params = {
   flySpeed: 50,
   flyHeight: 4.5,
   flyLookAhead: 16,
-  flyBehind: 14,        // camera distance behind the character (runner follow)
+  flyBehind: 24,        // camera distance behind the character (runner follow)
   showRunner: true,
   focalLength: 35,      // mm (full-frame equivalent) -> camera FOV
   frameRatio: 'off',    // letterbox the view to an aspect ratio
@@ -355,7 +355,7 @@ const params = {
   // traveler character + collectible spheres (ported from martell-traveler)
   character: true,
   charColor: '#ffe6a6',
-  charIntensity: 1.6,
+  charIntensity: 1.1,
   charThick: 0.8,       // strand thickness (start)
   charThickMax: 2.0,    // thickness when fully grown
   charAmp: 1.5,         // wake amplitude
@@ -2831,7 +2831,14 @@ renderer.setAnimationLoop(() => {
   if (flowCurve && (params.showRunner || params.flyMode || params.character)) {
     const prev = runT;
     runT = (runT + (params.flySpeed * dt) / curveLen) % 1;
-    if (runT < prev) { flyTime = 0; if (params.character) resetSpheresLap(); } // wrapped → new lap
+    if (runT < prev) { // wrapped → new lap
+      flyTime = 0;
+      if (params.character) {
+        resetSpheresLap();
+        flowCurve.getPointAt(runT, _p); _p.y += params.charFloat;
+        traveler.resetHistory(_p); // avoid the trail streaking back to the mountain
+      }
+    }
     flowCurve.getPointAt(runT, _p);
     runner.position.copy(_p);
   }
@@ -2859,10 +2866,11 @@ renderer.setAnimationLoop(() => {
     flowCurve.getPointAt(runT, _p);
     flowCurve.getPointAt(Math.min(0.999, runT + params.flyLookAhead / curveLen), _a);
     if (params.character) {
-      // third-person: sit just behind the character, looking ahead
+      // third-person chase: sit behind + above and look AT the character
       flowCurve.getTangentAt(runT, _tan);
-      camera.position.set(_p.x - _tan.x * params.flyBehind, _p.y + params.charFloat + params.flyHeight, _p.z - _tan.z * params.flyBehind);
-      camera.lookAt(_a.x, _a.y + params.charFloat, _a.z);
+      const hy = _p.y + params.charFloat;
+      camera.position.set(_p.x - _tan.x * params.flyBehind, hy + params.flyHeight, _p.z - _tan.z * params.flyBehind);
+      camera.lookAt(_p.x, hy, _p.z);
     } else {
       camera.position.set(_p.x, _p.y + params.flyHeight, _p.z);
       camera.lookAt(_a.x, _a.y + params.flyHeight * 0.5, _a.z);
