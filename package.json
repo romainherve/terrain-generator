@@ -1,0 +1,13 @@
+{
+  "name": "martell",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public",
+    "db:migrate:local": "wrangler d1 migrations apply martell --local",
+    "db:migrate:remote": "wrangler d1 migrations apply martell --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.103.0"
+  }
+}

@@ -1,0 +1,12 @@
+name = "martell"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"                 # must equal env.DB used in every Function
+database_name = "martell"
+database_id = "7edf7a63-fc11-433f-afcf-94c39ef7de3b"
+
+[[r2_buckets]]
+binding = "MEDIA"              # env.MEDIA — uploaded SVG logos live here ('ASSETS' is reserved by Pages)
+bucket_name = "martell-assets"

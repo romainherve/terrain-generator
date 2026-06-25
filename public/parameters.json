@@ -199,17 +199,17 @@
   "charPulseWidth": 0.15,
   "charGrowDur": 0.6,
   "sphCount": 29,
-  "sphSize": 3,
+  "sphSize": 1.8,
   "sphSpread": 30,
   "sphElevation": 6,
   "sphColor": "#ffd089",
   "sphBreathAmp": 0.4,
   "sphBreathSpeed": 0.8,
   "sphFloatAmp": 1.5,
-  "sphFloatSpeed": 1.1,
+  "sphFloatSpeed": 1.15,
   "post": true,
   "toneMapping": "AgX",
-  "exposure": 1.27,
+  "exposure": 2,
   "outputGain": 0.19,
   "bloomStrength": 0.81,
   "bloomRadius": 0.81,
@@ -275,5 +275,17 @@
       "focal": 60
     }
   },
-  "defaultView": "Keyvisual"
+  "defaultView": "Keyvisual",
+  "ui": {
+    "screens": [],
+    "entry": null
+  },
+  "sphEmissive": 2.8,
+  "sphMetal": 0.7,
+  "sphRough": 0.18,
+  "sphMalusPct": 30,
+  "sphMalusColor": "#ff2a2a",
+  "sphMalusEmissive": 1.8,
+  "sphMalusMetal": 0.7,
+  "sphMalusRough": 0.18
 }
